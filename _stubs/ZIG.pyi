@@ -29,6 +29,15 @@ class ZIG:
     
     MSG = MSG
     
+    def init(self) -> None: ...
+    def get_info(self) -> Any: ...
+    def reset_to_factory(self) -> None: ...
+    def open_network(self) -> None: ...
+    def close_network(self) -> None: ...
+    def get_network_info(self) -> Any: ...
+    def update_network_status(self) -> None: ...
+    def scan_networks(self) -> list: ...
+
     def __init__(self, start: bool = True, storage: Optional[Any] = None):
         """Initialize Zigbee module
         
@@ -37,11 +46,11 @@ class ZIG:
             storage: Storage handler for device data
         """
         ...
-        
+    
     def start_network(self) -> None:
         """Start Zigbee network"""
         ...
-        
+    
     def recv(self) -> Optional[Tuple[int, int, int, int, int, bytes]]:
         """Receive Zigbee message
         
@@ -50,7 +59,16 @@ class ZIG:
             or None if no message available
         """
         ...
+    
+    def any(self) -> bool:
+        """Check if any messages are available
         
+        Returns:
+            True if messages are available, False otherwise
+        """
+        ...
+
+
     def set_recv_callback(self, callback: Callable[[Any], None]) -> None:
         """Set message receive callback
         
@@ -59,10 +77,10 @@ class ZIG:
         """
         ...
         
-    def send_raw_command(self, addr: int, endpoint: int, cluster_id: int, 
+    def send_command(self, addr: int, endpoint: int, cluster_id: int, 
                         cmd_id: int, data: bytes) -> None:
-        """Send raw Zigbee command
-        
+        """Send Zigbee command
+
         Args:
             addr: Target device address
             endpoint: Target endpoint
@@ -71,3 +89,11 @@ class ZIG:
             data: Command data
         """
         ...
+    def bind_cluster(self, addr: int, endpoint: int, cluster_id: int) -> None: ...
+    def configure_report(self, addr: int, endpoint: int, cluster_id: int, attr_id: int, min_int: int, max_int: int, change: Any) -> None: ...
+    def set_report_config(self, addr: int, endpoint: int, cluster_id: int, attr_id: int, config: Any) -> None: ...
+    def read_attr(self, addr: int, endpoint: int, cluster_id: int, attr_id: int) -> Any: ...
+    def write_attr(self, addr: int, endpoint: int, cluster_id: int, attr_id: int, value: Any) -> None: ...
+
+    # Message type constants
+    #
