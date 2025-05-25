@@ -1,0 +1,13 @@
+set(SDKCONFIG_DEFAULTS
+    ${SDKCONFIG_DEFAULTS}
+    boards/sdkconfig.240mhz
+    boards/sdkconfig.spiram_oct
+    ${MICROPY_BOARD_DIR}/sdkconfig.SPIRAM_ZIG
+)
+
+
+list(APPEND MICROPY_DEF_BOARD
+    MICROPY_HW_BOARD_NAME="SPIRAM_ZIG"
+    MICROPY_HW_MCU_NAME="ESP32-S3"
+    MICROPY_HW_ENABLE_UART_REPL=1
+)

@@ -1,0 +1,58 @@
+# --- Общие системные ---
+.DS_Store
+Thumbs.db
+
+# --- MicroPython ---
+*.mpy
+
+# --- C / Сборка ---
+*.o
+*.out
+*.elf
+*.hex
+*.bin
+*.map
+*.a
+*.d
+*.obj
+*.lst
+*.dep
+*.cmd
+*.suo
+*.idb
+*.pdb
+*.mod
+*.cmd
+*.tmp
+*.log
+*.bak
+*.swp
+*.swn
+*.swo
+build/
+Build/
+output/
+out/
+*.exe
+
+# --- IDE ---
+.vscode/
+.idea/
+*.code-workspace
+
+# --- Python (если вдруг скрипты) ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- MacOS ---
+*.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+*tmp
+*tools
+

@@ -1,0 +1,73 @@
+"""
+ZigBee Home Automation Standard Device Types
+Auto-generated stub file for IDE support
+Generated on 2025-05-25 14:15:03
+"""
+
+from typing import Union, Optional
+
+# Module constants/enums
+ESP_ZB_HA_ON_OFF_SWITCH_DEVICE_ID: int = 0  # 0x0000
+ESP_ZB_HA_LEVEL_CONTROL_SWITCH_DEVICE_ID: int = 1  # 0x0001
+ESP_ZB_HA_ON_OFF_OUTPUT_DEVICE_ID: int = 2  # 0x0002
+ESP_ZB_HA_LEVEL_CONTROLLABLE_OUTPUT_DEVICE_ID: int = 3  # 0x0003
+ESP_ZB_HA_SCENE_SELECTOR_DEVICE_ID: int = 4  # 0x0004
+ESP_ZB_HA_CONFIGURATION_TOOL_DEVICE_ID: int = 5  # 0x0005
+ESP_ZB_HA_REMOTE_CONTROL_DEVICE_ID: int = 6  # 0x0006
+ESP_ZB_HA_COMBINED_INTERFACE_DEVICE_ID: int = 7  # 0x0007
+ESP_ZB_HA_RANGE_EXTENDER_DEVICE_ID: int = 8  # 0x0008
+ESP_ZB_HA_MAINS_POWER_OUTLET_DEVICE_ID: int = 9  # 0x0009
+ESP_ZB_HA_DOOR_LOCK_DEVICE_ID: int = 10  # 0x000A
+ESP_ZB_HA_DOOR_LOCK_CONTROLLER_DEVICE_ID: int = 11  # 0x000B
+ESP_ZB_HA_SIMPLE_SENSOR_DEVICE_ID: int = 12  # 0x000C
+ESP_ZB_HA_CONSUMPTION_AWARENESS_DEVICE_ID: int = 13  # 0x000D
+ESP_ZB_HA_HOME_GATEWAY_DEVICE_ID: int = 80  # 0x0050
+ESP_ZB_HA_SMART_PLUG_DEVICE_ID: int = 81  # 0x0051
+ESP_ZB_HA_WHITE_GOODS_DEVICE_ID: int = 82  # 0x0052
+ESP_ZB_HA_METER_INTERFACE_DEVICE_ID: int = 83  # 0x0053
+ESP_ZB_HA_ON_OFF_LIGHT_DEVICE_ID: int = 256  # 0x0100
+ESP_ZB_HA_DIMMABLE_LIGHT_DEVICE_ID: int = 257  # 0x0101
+ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID: int = 258  # 0x0102
+ESP_ZB_HA_DIMMER_SWITCH_DEVICE_ID: int = 260  # 0x0104
+ESP_ZB_HA_COLOR_DIMMER_SWITCH_DEVICE_ID: int = 261  # 0x0105
+ESP_ZB_HA_LIGHT_SENSOR_DEVICE_ID: int = 262  # 0x0106
+ESP_ZB_HA_SHADE_DEVICE_ID: int = 512  # 0x0200
+ESP_ZB_HA_SHADE_CONTROLLER_DEVICE_ID: int = 513  # 0x0201
+ESP_ZB_HA_WINDOW_COVERING_DEVICE_ID: int = 514  # 0x0202
+ESP_ZB_HA_WINDOW_COVERING_CONTROLLER_DEVICE_ID: int = 515  # 0x0203
+ESP_ZB_HA_HEATING_COOLING_UNIT_DEVICE_ID: int = 768  # 0x0300
+ESP_ZB_HA_THERMOSTAT_DEVICE_ID: int = 769  # 0x0301
+ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID: int = 770  # 0x0302
+ESP_ZB_HA_IAS_CONTROL_INDICATING_EQUIPMENT_ID: int = 1024  # 0x0400
+ESP_ZB_HA_IAS_ANCILLARY_CONTROL_EQUIPMENT_ID: int = 1025  # 0x0401
+ESP_ZB_HA_IAS_ZONE_ID: int = 1026  # 0x0402
+ESP_ZB_HA_IAS_WARNING_DEVICE_ID: int = 1027  # 0x0403
+ESP_ZB_HA_TEST_DEVICE_ID: int = 65520  # 0xfff0
+ESP_ZB_HA_CUSTOM_TUNNEL_DEVICE_ID: int = 65521  # 0xfff1
+ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID: int = 65522  # 0xfff2
+
+# Module functions
+def get_type(value: int) -> str:
+    """
+    Get the string representation of a constant value.
+    
+    Args:
+        value: Integer value to lookup
+    
+    Returns:
+        String name of the constant
+    """
+    ...
+
+def size(value: int) -> int:
+    """
+    Get the size in bytes for a data type.
+    
+    Args:
+        value: Data type value
+    
+    Returns:
+        Size in bytes
+    """
+    ...
+
