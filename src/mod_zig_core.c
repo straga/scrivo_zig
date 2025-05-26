@@ -58,6 +58,11 @@ static const uint32_t esp32_zig_commissioning_task_priority = 5; // Priority for
 // Global variable for cluster list
 esp_zb_cluster_list_t *cluster_list = NULL;
 
+// Global instance of the main Zigbee object for MicroPython
+//esp32_zig_obj_t esp32_zig_obj; 
+// Global pointer to the main Zigbee object, initialized in esp_zb_app_init
+esp32_zig_obj_t *zb_obj = &esp32_zig_obj;
+
 // Global variable for endpoint list
 static esp_zb_ep_list_t *global_ep_list = NULL;
 

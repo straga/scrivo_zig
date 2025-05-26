@@ -107,8 +107,8 @@ bool init_device_manager(void) {
 }
 
 // High-level device management functions
-esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, uint64_t ieee_addr) {
-    esp_err_t err = device_manager_add(short_addr, ieee_addr);
+esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, const uint8_t ieee_addr[8], bool initial_load_context) {
+    esp_err_t err = device_manager_add(short_addr, ieee_addr, MP_OBJ_FROM_PTR(self), initial_load_context);
     return err;
 }
 

@@ -53,50 +53,74 @@ typedef struct {
 
 // Maximum configurations
 #define MAX_DEVICES 32
-#define MAX_ENDPOINTS 40
+#define MAX_ENDPOINTS 40       // Unified value
+#define MAX_CLUSTERS 16        // Unified value
 #define MAX_REPORT_CFGS 16
+
+#define MAX_DEVICE_NAME_LEN 32
+#define MAX_MANUFACTURER_NAME_LEN 32
+#define MAX_MODEL_LEN 32
+
+// Forward declaration if esp_zigbee_zcl_common.h is not included here
+// Alternatively, include the necessary header
+// #include "zcl/esp_zigbee_zcl_common.h" // Assuming this path is correct for esp_zb_zcl_report_direction_t
+
+// Define constants for direction if the enum itself is not directly used or available.
+#define REPORT_CFG_DIRECTION_SEND 0x00
+#define REPORT_CFG_DIRECTION_RECV 0x01
 
 // Structure for attribute reporting configuration
 typedef struct {
     bool in_use;            // Whether this configuration slot is in use
+    uint8_t direction;      // Direction of reporting: 0x00 for SEND, 0x01 for RECV
+                            // Corresponds to esp_zb_zcl_report_direction_t
     uint8_t ep;             // Endpoint
     uint16_t cluster_id;    // Cluster ID
     uint16_t attr_id;       // Attribute ID
-    uint8_t attr_type;      // Attribute type
-    uint16_t min_int;       // Minimum reporting interval
-    uint16_t max_int;       // Maximum reporting interval
-    uint32_t timeout;       // Reporting timeout
+
+    union {
+        struct {                                    // Configuration for sending reports (direction == REPORT_CFG_DIRECTION_SEND)
+            uint8_t attr_type;                      // Attribute type
+            uint16_t min_int;                       // Minimum reporting interval
+            uint16_t max_int;                       // Maximum reporting interval
+            uint32_t reportable_change_val;         // Reportable change value, 0xFFFFFFFF if not used/discrete
+        } send_cfg;
+
+        struct {                                    // Configuration for receiving reports (direction == REPORT_CFG_DIRECTION_RECV)
+            uint16_t timeout_period;                // Timeout period for receiving reports
+        } recv_cfg;
+    };
 } report_cfg_t;
 
 // Structure for storing information about the endpoint
 typedef struct {
-    uint8_t endpoint;               // Endpoint number
+    uint8_t endpoint;              // Endpoint number
     uint16_t profile_id;           // Profile ID
     uint16_t device_id;            // Device ID
-    uint16_t cluster_list[32];     // List of supported clusters
+    uint16_t cluster_list[MAX_CLUSTERS]; // List of supported clusters
     uint8_t cluster_count;         // Number of clusters
 } zigbee_endpoint_t;
 
 // Structure for storing information about a Zigbee device
 typedef struct {
-    uint16_t short_addr;                    // Short address of the device
-    uint8_t ieee_addr[8];                   // IEEE address as byte array
-    uint8_t endpoint_count;                 // Number of endpoints
-    zigbee_endpoint_t endpoints[MAX_ENDPOINTS];  // Array of endpoints
-    report_cfg_t report_cfgs[MAX_REPORT_CFGS];  // Array of report configurations
-    uint32_t last_seen;                     // Last seen timestamp
-    char manufacturer_name[32];             // Manufacturer name
-    char model[32];                         // Model name
-    char device_name[32];                   // Device name
-    bool active;                            // Device active status
-    uint8_t firmware_version;               // Firmware version
-    uint8_t power_source;                   // Power source
-    uint8_t battery_voltage;                // Battery voltage
-    uint8_t battery_percentage;             // Battery percentage
-    uint16_t manufacturer_code;             // Manufacturer code
-    uint8_t prod_config_version;            // Production config version
-    uint8_t last_lqi;                       // Link Quality Indicator (0-255)
-    int8_t last_rssi;                       // Received Signal Strength Indicator (dBm)
+    uint16_t short_addr;                            // Short address of the device
+    uint8_t ieee_addr[8];                           // IEEE address as byte array
+    uint8_t endpoint_count;                         // Number of endpoints
+    zigbee_endpoint_t endpoints[MAX_ENDPOINTS];     // Array of endpoints
+    report_cfg_t report_cfgs[MAX_REPORT_CFGS];      // Array of report configurations
+    uint32_t last_seen;                             // Last seen timestamp
+    char manufacturer_name[MAX_MANUFACTURER_NAME_LEN]; // Manufacturer name
+    char model[MAX_MODEL_LEN];                                 // Model name
+    char device_name[MAX_DEVICE_NAME_LEN];                           // Device name
+    bool active;                                    // Device active status
+    uint8_t firmware_version;                       // Firmware version
+    uint8_t power_source;                           // Power source
+    uint8_t battery_voltage;                        // Battery voltage
+    uint8_t battery_percentage;                     // Battery percentage
+    uint16_t manufacturer_code;                     // Manufacturer code
+    uint8_t prod_config_version;                    // Production config version
+    uint8_t last_lqi;                               // Link Quality Indicator (0-255)
+    int8_t last_rssi;                               // Received Signal Strength Indicator (dBm)
 } zigbee_device_t;
 
 // Structure for managing a list of Zigbee devices
@@ -108,7 +132,7 @@ typedef struct {
 // Structure for Zigbee messages
 typedef struct {
     uint8_t msg_py;         // Micropython Message type
-    uint8_t signal_type;       // Signal type
+    uint8_t signal_type;    // Signal type
     uint16_t src_addr;      // Source address
     uint8_t endpoint;       // Endpoint
     uint16_t cluster_id;    // Cluster ID

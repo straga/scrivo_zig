@@ -19,8 +19,9 @@ cJSON* device_to_json(const zigbee_device_t *device);
  * 
  * @param json JSON object with device data
  * @param device Pointer to structure for filling
+ * @param zig_obj_mp mp_obj_t representing the main zigbee object, for operations like adding to device_manager
  * @return esp_err_t in case of success
  */
-esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device);
+esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t zig_obj_mp);
 
 #endif

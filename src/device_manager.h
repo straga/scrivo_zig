@@ -4,7 +4,8 @@
 #define DEVICE_MANAGER_H
 
 #include "esp_err.h"
-#include "mod_zig_types.h"
+#include "py/obj.h" // For mp_obj_t
+#include "mod_zig_types.h" // Include the centralized type definitions
 
 /**
  * @brief Initialize device manager
@@ -20,7 +21,7 @@ esp_err_t device_manager_init(void);
  * @param ieee_addr IEEE address of device
  * @return esp_err_t in case of success
  */
-esp_err_t device_manager_add(uint16_t short_addr, uint64_t ieee_addr);
+esp_err_t device_manager_add(uint16_t new_short_addr, const uint8_t ieee_addr[8], mp_obj_t zig_obj_mp, bool initial_load_context);
 
 /**
  * @brief Delete device

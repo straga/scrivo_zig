@@ -24,7 +24,7 @@ mp_obj_t esp32_zig_get_device(size_t n_args, const mp_obj_t *args);
 // Internal helper functions
 bool espz_init_device_discovery(esp32_zig_obj_t *self);
 bool init_device_manager(void);
-esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, uint64_t ieee_addr);
+esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, const uint8_t ieee_addr[8], bool initial_load_context);
 esp_err_t remove_device_from_list(esp32_zig_obj_t *self, uint16_t short_addr);
 esp_err_t update_device_info(esp32_zig_obj_t *self, zigbee_device_t *device);
 

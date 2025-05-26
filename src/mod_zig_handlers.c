@@ -113,21 +113,57 @@ void bind_cb(esp_zb_zdp_status_t status, void *user_ctx) {
                 if (r->in_use && r->ep == ctx->endpoint && r->cluster_id == ctx->cluster_id) {
                     esp_zb_zcl_config_report_cmd_t report_cmd = {0};
                     esp_zb_zcl_config_report_record_t rec = {0};
-                    bool report_change = true;
+                    uint32_t *allocated_rc_val = NULL; // To manage allocated memory for reportable_change
+
                     report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
-                    report_cmd.zcl_basic_cmd.dst_endpoint = r->ep;
+                    report_cmd.zcl_basic_cmd.dst_endpoint = r->ep; // Use endpoint from report_cfg_t
                     report_cmd.zcl_basic_cmd.src_endpoint = ESP_ZB_GATEWAY_ENDPOINT;
                     report_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-                    report_cmd.clusterID = r->cluster_id;
+                    report_cmd.clusterID = r->cluster_id; // Use cluster_id from report_cfg_t
                     report_cmd.record_number = 1;
-                    rec.min_interval = r->min_int;
-                    rec.max_interval = r->max_int;
-                    rec.reportable_change = &report_change;
-                    rec.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
-                    rec.attributeID = r->attr_id;
-                    rec.attrType = r->attr_type;
                     report_cmd.record_field = &rec;
+                    // The report_cmd.direction (for the command frame) is typically ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV
+                    // This is often a default or set implicitly by the SDK function if not a direct field here.
+                    // Let's assume the SDK handles the command direction or it's part of zcl_basic_cmd implicitly.
+
+                    rec.attributeID = r->attr_id; // Use attr_id from report_cfg_t
+
+                    if (r->direction == REPORT_CFG_DIRECTION_SEND) {
+                        rec.direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND; // Correct direction for the record
+                        rec.attrType = r->send_cfg.attr_type;
+                        rec.min_interval = r->send_cfg.min_int;
+                        rec.max_interval = r->send_cfg.max_int;
+                        
+                        if (r->send_cfg.reportable_change_val != 0xFFFFFFFF) {
+                            allocated_rc_val = malloc(sizeof(uint32_t));
+                            if (allocated_rc_val) {
+                                *allocated_rc_val = r->send_cfg.reportable_change_val;
+                                rec.reportable_change = allocated_rc_val;
+                            } else {
+                                ESP_LOGE(HANDLERS_TAG, "Failed to allocate for reportable_change in bind_cb");
+                                rec.reportable_change = NULL; // Or handle error more gracefully
+                            }
+                        } else {
+                            rec.reportable_change = NULL; // No reportable change configured or discrete attribute
+                        }
+                    } else if (r->direction == REPORT_CFG_DIRECTION_RECV) {
+                        rec.direction = ESP_ZB_ZCL_REPORT_DIRECTION_RECV; // Correct direction for the record
+                        rec.timeout = r->recv_cfg.timeout_period;
+                        // For RECV, other fields like attrType, min/max_interval, reportable_change are not used in the record.
+                    } else {
+                        ESP_LOGW(HANDLERS_TAG, "Unknown report_cfg direction: %d", r->direction);
+                        if (allocated_rc_val) free(allocated_rc_val); // Should not happen here, but good practice
+                        continue; // Skip this configuration
+                    }
+                    
+                    ESP_LOGI(HANDLERS_TAG, "Auto-configuring reporting after bind: addr=0x%04x, ep=%d, cl=0x%04x, attr=0x%04x, dir=%d", 
+                        ctx->short_addr, r->ep, r->cluster_id, r->attr_id, r->direction);
+
                     esp_zb_zcl_config_report_cmd_req(&report_cmd);
+
+                    if (allocated_rc_val) {
+                        free(allocated_rc_val);
+                    }
                 }
             }
         }
@@ -409,9 +445,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 esp_zb_get_long_address(coord_ieee);
                 
                 // Add or update coordinator in device manager
-                esp_err_t err = device_manager_add(0x0000, *(uint64_t*)coord_ieee);
+                esp_err_t err = device_manager_add(0x0000, coord_ieee, MP_OBJ_FROM_PTR(zb_obj), false);
                 if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGE(HANDLERS_TAG, "Failed to add coordinator to device manager");
+                    ESP_LOGE(HANDLERS_TAG, "Failed to add/update coordinator in device manager: %s", esp_err_to_name(err));
                 } else {
                     // Update coordinator info
                     zigbee_device_t *coordinator = device_manager_get(0x0000);
@@ -473,18 +509,18 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             ESP_LOGI(HANDLERS_TAG, "CASE: New device announce short=0x%04x", dev_annce_params->device_short_addr);
 
             // Find or add device using device manager
-            esp_err_t err = device_manager_add(dev_annce_params->device_short_addr, *(uint64_t*)dev_annce_params->ieee_addr);
+            esp_err_t err = device_manager_add(dev_annce_params->device_short_addr, dev_annce_params->ieee_addr, MP_OBJ_FROM_PTR(zb_obj), false);
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Failed to add device, error %d", err);
-                break;
+                ESP_LOGW(HANDLERS_TAG, "ZIGBEE: Failed to add/update device 0x%04x in manager, error %s. Continuing with EP discovery.", 
+                         dev_annce_params->device_short_addr, esp_err_to_name(err));
             }
 
-            // Get device
+            // Get device - this should now reliably get the device, even if it re-joined
             zigbee_device_t *device = device_manager_get(dev_annce_params->device_short_addr);
-            device->short_addr = dev_annce_params->device_short_addr;
-            memcpy(device->ieee_addr, dev_annce_params->ieee_addr, sizeof(esp_zb_ieee_addr_t));
-            device->active = true;
-            device->last_seen = esp_timer_get_time() / 1000;
+            if (!device) {
+                ESP_LOGE(HANDLERS_TAG, "ZIGBEE: Device 0x%04x not found in manager after add/update attempt. Cannot proceed with EP discovery.", dev_annce_params->device_short_addr);
+                break;
+            }
             
             // Request active endpoints for update 
             esp_zb_zdo_active_ep_req_param_t active_ep_req = {

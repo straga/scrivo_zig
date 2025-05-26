@@ -81,7 +81,7 @@ static mp_obj_t esp32_zig_recv(size_t n_args, const mp_obj_t *pos_args, mp_map_t
         mv->len = msg.data_len;
         memcpy(mv->items, msg.data, msg.data_len);
     }
-    // Fill tuple/list: [signal_type, src_addr, endpoint, cluster_id, data]
+    // Fill tuple/list: [msg_py, signal_type, src_addr, endpoint, cluster_id, data]
     items[0] = MP_OBJ_NEW_SMALL_INT(msg.msg_py);
     items[1] = MP_OBJ_NEW_SMALL_INT(msg.signal_type);
     items[2] = MP_OBJ_NEW_SMALL_INT(msg.src_addr);
@@ -215,135 +215,311 @@ static mp_obj_t esp32_zig_send_command(size_t n_args, const mp_obj_t *pos_args, 
 MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_send_command_obj, 1, esp32_zig_send_command);
 
 
+static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum {
+        ARG_addr, ARG_ep, ARG_cl
+    };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_addr,    MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_ep,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_cl,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+    };
 
+    // Parse arguments
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
+    // Extract argument values
+    uint16_t addr = args[ARG_addr].u_int;
+    uint8_t ep = args[ARG_ep].u_int;
+    uint16_t cluster = args[ARG_cl].u_int;
 
-static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *args) {
-    // args: (self, addr, endpoint, cluster_id)
-    uint16_t addr      = mp_obj_get_int(args[1]);
-    uint8_t  ep        = mp_obj_get_int(args[2]);
-    uint16_t cluster   = mp_obj_get_int(args[3]);
+    // Validate arguments
+    if (addr == 0) {
+        mp_raise_ValueError("Device address cannot be 0");
+    }
+    if (ep == 0 || ep > 254) {
+        mp_raise_ValueError("Endpoint must be between 1 and 254");
+    }
 
-    // 1) ZDO Bind
-    esp_zb_zdo_bind_req_param_t bind_req = {0};
     // Get device by short address using device manager
     zigbee_device_t *device = device_manager_get(addr);
     if (!device) {
         mp_raise_msg_varg(&mp_type_ValueError,
                           "Device 0x%04x not found", addr);
     }
+
+    // Prepare ZDO Bind request
+    esp_zb_zdo_bind_req_param_t bind_req = {0};
     
-    // Copy IEEE address
+    // Copy IEEE address from device
     memcpy(bind_req.src_address, device->ieee_addr, sizeof(bind_req.src_address));
     
-    bind_req.cluster_id    = cluster;
-    bind_req.src_endp      = ep;
+    // Set bind parameters
+    bind_req.cluster_id = cluster;
+    bind_req.src_endp = ep;
     bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
-    esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
-    bind_req.dst_endp      = ESP_ZB_GATEWAY_ENDPOINT;
-    bind_req.req_dst_addr  = addr;
     
+    // Get coordinator's IEEE address as destination
+    esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
+    bind_req.dst_endp = ESP_ZB_GATEWAY_ENDPOINT;
+    bind_req.req_dst_addr = addr;
+    
+    // Allocate bind context for callback
     bind_ctx_t *bctx = malloc(sizeof(bind_ctx_t));
     if (bctx == NULL) {
         mp_raise_msg(&mp_type_MemoryError, "Failed to allocate bind context");
     }
     
-    *bctx = (bind_ctx_t){ .short_addr = addr,
-                          .endpoint = ep,
-                          .cluster_id = cluster };
+    // Initialize bind context
+    *bctx = (bind_ctx_t){ 
+        .short_addr = addr,
+        .endpoint = ep,
+        .cluster_id = cluster 
+    };
+
+    ESP_LOGI(ZIG_CMD_NAMESPACE, "Binding cluster: addr=0x%04x, ep=%d, cluster=0x%04x", 
+             addr, ep, cluster);
                           
+    // Send bind request
     ZB_LOCK();
     esp_zb_zdo_device_bind_req(&bind_req, bind_cb, bctx);
     ZB_UNLOCK();
 
     return mp_const_none;
 }
-MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_bind_cluster_obj, 4, 4, esp32_zig_bind_cluster);
+MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_bind_cluster_obj, 1, esp32_zig_bind_cluster);
+
+
+// static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *args) {
+//     // args: (self, addr, endpoint, cluster_id)
+//     uint16_t addr      = mp_obj_get_int(args[1]);
+//     uint8_t  ep        = mp_obj_get_int(args[2]);
+//     uint16_t cluster   = mp_obj_get_int(args[3]);
+
+//     // 1) ZDO Bind
+//     esp_zb_zdo_bind_req_param_t bind_req = {0};
+//     // Get device by short address using device manager
+//     zigbee_device_t *device = device_manager_get(addr);
+//     if (!device) {
+//         mp_raise_msg_varg(&mp_type_ValueError,
+//                           "Device 0x%04x not found", addr);
+//     }
+    
+//     // Copy IEEE address
+//     memcpy(bind_req.src_address, device->ieee_addr, sizeof(bind_req.src_address));
+    
+//     bind_req.cluster_id    = cluster;
+//     bind_req.src_endp      = ep;
+//     bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
+//     esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
+//     bind_req.dst_endp      = ESP_ZB_GATEWAY_ENDPOINT;
+//     bind_req.req_dst_addr  = addr;
+    
+//     bind_ctx_t *bctx = malloc(sizeof(bind_ctx_t));
+//     if (bctx == NULL) {
+//         mp_raise_msg(&mp_type_MemoryError, "Failed to allocate bind context");
+//     }
+    
+//     *bctx = (bind_ctx_t){ .short_addr = addr,
+//                           .endpoint = ep,
+//                           .cluster_id = cluster };
+                          
+//     ZB_LOCK();
+//     esp_zb_zdo_device_bind_req(&bind_req, bind_cb, bctx);
+//     ZB_UNLOCK();
+
+//     return mp_const_none;
+// }
+// MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_bind_cluster_obj, 4, 4, esp32_zig_bind_cluster);
 
 
 // Python API: configure reporting for a bound cluster
-static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *args) {
-    // args: (self, addr, endpoint, cluster_id, attribute_id, attr_type, [min_int, max_int])
-    uint16_t addr = mp_obj_get_int(args[1]);
-    uint8_t ep = mp_obj_get_int(args[2]);
-    uint16_t cluster = mp_obj_get_int(args[3]);
-    uint16_t attr_id = mp_obj_get_int(args[4]);
-    uint8_t attr_type = mp_obj_get_int(args[5]);
-    // default reporting intervals
-    uint16_t min_int = 0;
-    uint16_t max_int = 30;
-    if (n_args > 6) {
-        min_int = mp_obj_get_int(args[6]);
-    }
-    if (n_args > 7) {
-        max_int = mp_obj_get_int(args[7]);
-    }
-    bool report_change = true;
+static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+
+    enum {
+        ARG_addr, ARG_ep, ARG_cl, ARG_attr, ARG_direction, // Common args
+        ARG_attr_type, ARG_min_int, ARG_max_int, ARG_reportable_change, // For SEND direction
+        ARG_timeout // For RECV direction
+    };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_addr,     MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_ep,       MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_cl,       MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} }, // cluster_id
+        { MP_QSTR_attr,     MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} }, // attr_id
+        { MP_QSTR_direction, MP_ARG_INT, {.u_int = REPORT_CFG_DIRECTION_SEND} }, // Default to SEND
+        // Args for SEND direction (conditionally required/optional)
+        { MP_QSTR_attr_type, MP_ARG_INT, {.u_int = 0} }, // Will be checked if direction is SEND
+        { MP_QSTR_min_interval, MP_ARG_INT, {.u_int = 300} },
+        { MP_QSTR_max_interval, MP_ARG_INT, {.u_int = 3600} },
+        { MP_QSTR_reportable_change, MP_ARG_INT, {.u_int = -1} }, // -1 signifies not set by user for SEND
+        // Arg for RECV direction (conditionally required)
+        { MP_QSTR_timeout,  MP_ARG_INT, {.u_int = 0xFFFF} }, // Marker for not set for RECV
+    };
+
+    mp_arg_val_t vals[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, vals);
+
+    uint16_t addr_val = vals[ARG_addr].u_int;
+    uint8_t ep_val = vals[ARG_ep].u_int;
+    uint16_t cluster_id_val = vals[ARG_cl].u_int;
+    uint16_t attribute_id_val = vals[ARG_attr].u_int;
+    uint8_t direction_val = (uint8_t)vals[ARG_direction].u_int;
+
     esp_zb_zcl_config_report_cmd_t report_cmd;
     esp_zb_zcl_config_report_record_t record;
     memset(&report_cmd, 0, sizeof(report_cmd));
-    report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = addr;
-    report_cmd.zcl_basic_cmd.dst_endpoint = ep;
-    report_cmd.zcl_basic_cmd.src_endpoint = ESP_ZB_GATEWAY_ENDPOINT;
+    memset(&record, 0, sizeof(record));
+
+    report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = addr_val;
+    report_cmd.zcl_basic_cmd.dst_endpoint = ep_val;
+    report_cmd.zcl_basic_cmd.src_endpoint = ESP_ZB_GATEWAY_ENDPOINT; // Assuming this is the gateway's endpoint
     report_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    report_cmd.clusterID = cluster;
+    report_cmd.clusterID = cluster_id_val;
     report_cmd.record_number = 1;
-    record.min_interval = min_int;
-    record.max_interval = max_int;
-    record.reportable_change = &report_change;
-    record.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
-    record.attributeID = attr_id;
-    record.attrType = attr_type;
-    report_cmd.record_field = &record;
+    report_cmd.record_field = &record; 
+    // report_cmd.direction is for the command itself, usually TO_SRV, this is implicitly set or default
+
+    record.attributeID = attribute_id_val;
+    record.direction = direction_val; // This is esp_zb_zcl_report_direction_t
+
+    uint32_t *allocated_reportable_change_val = NULL;
+
+    if (direction_val == REPORT_CFG_DIRECTION_SEND) {
+        // Check if attr_type was actually passed using mp_map_lookup
+        mp_map_elem_t *elem_attr_type = mp_map_lookup(kw_args, MP_OBJ_NEW_QSTR(MP_QSTR_attr_type), MP_MAP_LOOKUP);
+        if (elem_attr_type == NULL) { // attr_type was not provided
+             mp_raise_ValueError("attr_type is required for SEND direction");
+        }
+        // Access fields of esp_zb_zcl_config_report_record_t directly for SEND case
+        record.attrType = (uint8_t)vals[ARG_attr_type].u_int;
+        record.min_interval = (uint16_t)vals[ARG_min_int].u_int;
+        record.max_interval = (uint16_t)vals[ARG_max_int].u_int;
+
+        int reportable_change_input = vals[ARG_reportable_change].u_int;
+
+        // Всегда выделяем память для SEND direction
+        allocated_reportable_change_val = malloc(sizeof(uint32_t));
+        if (allocated_reportable_change_val == NULL) {
+            mp_raise_msg(&mp_type_MemoryError, "Failed to allocate for reportable_change");
+        }
+        
+        if (reportable_change_input != -1) {
+            // Пользователь указал значение
+            *allocated_reportable_change_val = (uint32_t)reportable_change_input;
+        } else {
+            // Пользователь не указал - используем 0 (любое изменение) или 0xFFFFFFFF (только по времени)
+            *allocated_reportable_change_val = 0xFFFFFFFF; // Только по времени
+        }
+        record.reportable_change = allocated_reportable_change_val;
+
+
+    } else if (direction_val == REPORT_CFG_DIRECTION_RECV) {
+        // Check if timeout was actually passed or is still marker
+        if (vals[ARG_timeout].u_int == 0xFFFF) { 
+             mp_raise_ValueError("timeout is required for RECV direction");
+        }
+        // Access field of esp_zb_zcl_config_report_record_t directly for RECV case
+        record.timeout = (uint16_t)vals[ARG_timeout].u_int;
+    } else {
+        mp_raise_ValueError("Invalid direction value");
+    }
+
+    uint8_t tsn;
     ZB_LOCK();
-    esp_zb_zcl_config_report_cmd_req(&report_cmd);
+    tsn = esp_zb_zcl_config_report_cmd_req(&report_cmd);
     ZB_UNLOCK();
-    return mp_const_none;
+
+    if (allocated_reportable_change_val != NULL) {
+        free(allocated_reportable_change_val);
+    }
+
+    return mp_obj_new_int(tsn);
 }
-MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_configure_report_obj, 6, 8, esp32_zig_configure_report);
+MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_configure_report_obj, 1, esp32_zig_configure_report);
 
 
 
 // Python API: set preconfigured report parameters for a device
-static mp_obj_t esp32_zig_set_report_config(size_t n_args, const mp_obj_t *args) {
-    // args: (self, addr, ep, cluster, attr_id, attr_type, [min_interval, [max_interval]])
-    uint16_t addr      = mp_obj_get_int(args[1]);
-    uint8_t  ep        = mp_obj_get_int(args[2]);
-    uint16_t cluster   = mp_obj_get_int(args[3]);
-    uint16_t attr_id   = mp_obj_get_int(args[4]);
-    uint8_t  attr_type = mp_obj_get_int(args[5]);
-    // default intervals
-    uint16_t min_int = 0;
-    uint16_t max_int = 30;
-    if (n_args > 6) {
-        min_int = mp_obj_get_int(args[6]);
-    }
-    if (n_args > 7) {
-        max_int = mp_obj_get_int(args[7]);
-    }
-    // Get device using device manager
-    zigbee_device_t *dev = device_manager_get(addr);
+static mp_obj_t esp32_zig_set_report_config(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+
+    enum {
+        ARG_addr, ARG_ep, ARG_cl, ARG_attr, ARG_direction, // Common args
+        ARG_attr_type, ARG_min_int, ARG_max_int, ARG_reportable_change, // For SEND direction
+        ARG_timeout // For RECV direction
+    };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_addr,                 MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_ep,                   MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_cl,                   MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_attr,                 MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+
+        { MP_QSTR_direction,            MP_ARG_INT, {.u_int = REPORT_CFG_DIRECTION_SEND} }, // Default to SEND
+        // Args for SEND direction (conditionally required)
+        { MP_QSTR_attr_type,            MP_ARG_INT, {.u_int = 0} },          // Made optional here, will check dependency later
+        { MP_QSTR_min_int,              MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_max_int,              MP_ARG_INT, {.u_int = 30} },
+        { MP_QSTR_reportable_change,    MP_ARG_INT, {.u_int = 0xFFFFFFFF} }, // Marker for not set
+        // Arg for RECV direction (conditionally required)
+        { MP_QSTR_timeout,              MP_ARG_INT, {.u_int = 0xFFFF} },    // Marker for not set / default for RECV
+    };
+
+    mp_arg_val_t vals[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, vals);
+
+    uint16_t addr_val      = vals[ARG_addr].u_int;
+    uint8_t  ep_val        = vals[ARG_ep].u_int;
+    uint16_t cl_val        = vals[ARG_cl].u_int;
+    uint16_t attr_id_val   = vals[ARG_attr].u_int;
+    uint8_t  direction_val = (uint8_t)vals[ARG_direction].u_int;
+
+    zigbee_device_t *dev = device_manager_get(addr_val);
     if (!dev) {
-        mp_raise_msg_varg(&mp_type_ValueError, "Device 0x%04x not found", addr);
+        mp_raise_msg_varg(&mp_type_ValueError, "Device 0x%04x not found", addr_val);
     }
     
-    // Find free slot
+    report_cfg_t *r_cfg = NULL;
     for (int j = 0; j < MAX_REPORT_CFGS; j++) {
-        report_cfg_t *r = &dev->report_cfgs[j];
-        if (!r->in_use) {
-            r->in_use      = true;
-            r->ep          = ep;
-            r->cluster_id  = cluster;
-            r->attr_id     = attr_id;
-            r->attr_type   = attr_type;
-            r->min_int     = min_int;
-            r->max_int     = max_int;
-            return mp_const_true;
+        if (!dev->report_cfgs[j].in_use) {
+            r_cfg = &dev->report_cfgs[j];
+            break;
         }
     }
-    mp_raise_msg(&mp_type_RuntimeError, "No free report slots");
+
+    if (!r_cfg) {
+        mp_raise_msg(&mp_type_RuntimeError, "No free report slots");
+        return mp_const_none; // Should not reach here due to raise
+    }
+
+    r_cfg->in_use      = true;
+    r_cfg->direction   = direction_val;
+    r_cfg->ep          = ep_val;
+    r_cfg->cluster_id  = cl_val;
+    r_cfg->attr_id     = attr_id_val;
+
+    if (direction_val == REPORT_CFG_DIRECTION_SEND) {
+        // attr_type is required for SEND direction
+        mp_map_elem_t *elem_attr_type = mp_map_lookup(kw_args, MP_OBJ_NEW_QSTR(MP_QSTR_attr_type), MP_MAP_LOOKUP);
+        if (elem_attr_type == NULL) { // Check if attr_type was actually passed
+             mp_raise_ValueError("attr_type is required for SEND direction");
+        }
+        r_cfg->send_cfg.attr_type = (uint8_t)vals[ARG_attr_type].u_int;
+        r_cfg->send_cfg.min_int = (uint16_t)vals[ARG_min_int].u_int;
+        r_cfg->send_cfg.max_int = (uint16_t)vals[ARG_max_int].u_int;
+        r_cfg->send_cfg.reportable_change_val = (uint32_t)vals[ARG_reportable_change].u_int;
+    } else if (direction_val == REPORT_CFG_DIRECTION_RECV) {
+        // timeout is required for RECV direction
+        if (vals[ARG_timeout].u_int == 0xFFFF) { // Check if timeout was actually passed or is still marker
+             mp_raise_ValueError("timeout is required for RECV direction");
+        }
+        r_cfg->recv_cfg.timeout_period = (uint16_t)vals[ARG_timeout].u_int;
+    } else {
+        mp_raise_ValueError("Invalid direction value");
+    }
+
+    return mp_const_true;
 }
-MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_set_report_config_obj, 6, 8, esp32_zig_set_report_config);
+MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_set_report_config_obj, 1, esp32_zig_set_report_config);
 
 
 // Modify attribute reading function
@@ -387,14 +563,11 @@ static mp_obj_t esp32_zig_read_attr(size_t n_args, const mp_obj_t *pos_args, mp_
         .attr_field = attr_field
     };
     uint8_t tsn;
-// Acquire lock before calling Zigbee API
     ZB_LOCK();
     tsn = esp_zb_zcl_read_attr_cmd_req(&read_req);
     ZB_UNLOCK();
     free(attr_field);
-    if (tsn == 0) {
-        mp_raise_msg(&mp_type_RuntimeError, "Failed to send read_attr");
-    }
+
     return mp_obj_new_int(tsn);
 }
 
@@ -463,14 +636,10 @@ static mp_obj_t esp32_zig_write_attr(size_t n_args, const mp_obj_t *pos_args, mp
 
     // Send command
     ZB_LOCK();
-    uint8_t tsn = esp_zb_zcl_write_attr_cmd_req(&cmd);
+    uint8_t tsn_write = esp_zb_zcl_write_attr_cmd_req(&cmd);
     ZB_UNLOCK();
 
-    if (tsn == 0) {
-        mp_raise_msg(&mp_type_RuntimeError, "Failed to send write_attr");
-    }
-    
-    return mp_obj_new_int(tsn);
+    return mp_obj_new_int(tsn_write);
 }
 
 MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_read_attr_obj, 1, esp32_zig_read_attr);

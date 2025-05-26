@@ -67,6 +67,6 @@ bool espz_init_device_discovery(esp32_zig_obj_t *self);
 // Device persistence
 esp_err_t save_devices_to_json(esp32_zig_obj_t *self);
 
-#define MAX_ENDPOINTS 40
+#define FIRMWARE_VERSION "v0.1.2"
 
 #endif // MOD_ZIG_MAIN_H

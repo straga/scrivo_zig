@@ -51,10 +51,10 @@ cJSON* device_to_json(const zigbee_device_t *device) {
     char ieee_addr_str[24];
     snprintf(ieee_addr_str, sizeof(ieee_addr_str), 
              "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
-             device->ieee_addr[7], device->ieee_addr[6],
-             device->ieee_addr[5], device->ieee_addr[4],
-             device->ieee_addr[3], device->ieee_addr[2],
-             device->ieee_addr[1], device->ieee_addr[0]);
+             device->ieee_addr[0], device->ieee_addr[1],
+             device->ieee_addr[2], device->ieee_addr[3],
+             device->ieee_addr[4], device->ieee_addr[5],
+             device->ieee_addr[6], device->ieee_addr[7]);
     cJSON_AddStringToObject(json, "ieee_addr", ieee_addr_str);
     
     // Add other device properties
@@ -136,13 +136,23 @@ cJSON* device_to_json(const zigbee_device_t *device) {
                 return NULL;
             }
 
+            // Common fields
+            cJSON_AddNumberToObject(report, "direction", device->report_cfgs[i].direction);
             cJSON_AddNumberToObject(report, "ep", device->report_cfgs[i].ep);
             cJSON_AddNumberToObject(report, "cluster_id", device->report_cfgs[i].cluster_id);
             cJSON_AddNumberToObject(report, "attr_id", device->report_cfgs[i].attr_id);
-            cJSON_AddNumberToObject(report, "attr_type", device->report_cfgs[i].attr_type);
-            cJSON_AddNumberToObject(report, "min_int", device->report_cfgs[i].min_int);
-            cJSON_AddNumberToObject(report, "max_int", device->report_cfgs[i].max_int);
-            cJSON_AddNumberToObject(report, "timeout", device->report_cfgs[i].timeout);
+
+            if (device->report_cfgs[i].direction == REPORT_CFG_DIRECTION_SEND) {
+                cJSON_AddNumberToObject(report, "attr_type", device->report_cfgs[i].send_cfg.attr_type);
+                cJSON_AddNumberToObject(report, "min_int", device->report_cfgs[i].send_cfg.min_int);
+                cJSON_AddNumberToObject(report, "max_int", device->report_cfgs[i].send_cfg.max_int);
+                // Only add reportable_change_val if it's not the 'unused' marker
+                if (device->report_cfgs[i].send_cfg.reportable_change_val != 0xFFFFFFFF) {
+                    cJSON_AddNumberToObject(report, "reportable_change_val", device->report_cfgs[i].send_cfg.reportable_change_val);
+                }
+            } else if (device->report_cfgs[i].direction == REPORT_CFG_DIRECTION_RECV) {
+                cJSON_AddNumberToObject(report, "timeout_period", device->report_cfgs[i].recv_cfg.timeout_period);
+            }
 
             cJSON_AddItemToArray(reports, report);
         }
@@ -153,7 +163,7 @@ cJSON* device_to_json(const zigbee_device_t *device) {
 }
 
 // Parse device from JSON object
-esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device) {
+esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t zig_obj_mp) {
     if (!json || !device) {
         ESP_LOGE(LOG_TAG, "NULL parameters");
         return ESP_ERR_INVALID_ARG;
@@ -207,14 +217,9 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device) {
     // Check if device exists, if not - add it
     zigbee_device_t *existing = device_manager_get(device->short_addr);
     if (!existing) {
-        // Convert IEEE address to uint64_t
-        uint64_t ieee_addr = 0;
-        for (int i = 0; i < 8; i++) {
-            ieee_addr |= (uint64_t)device->ieee_addr[i] << (i * 8);
-        }
-        esp_err_t err = device_manager_add(device->short_addr, ieee_addr);
-        if (err != ESP_OK) {
-            ESP_LOGE(LOG_TAG, "Failed to add device 0x%04x: %s", device->short_addr, esp_err_to_name(err));
+        esp_err_t err = device_manager_add(device->short_addr, device->ieee_addr, zig_obj_mp, true);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(LOG_TAG, "Failed to add device 0x%04x via device_from_json: %s", device->short_addr, esp_err_to_name(err));
             return err;
         }
     }
@@ -311,25 +316,55 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device) {
             cJSON *report = cJSON_GetArrayItem(reports, i);
             if (!cJSON_IsObject(report)) continue;
             
-            cJSON *ep = cJSON_GetObjectItem(report, "ep");
-            cJSON *cluster_id = cJSON_GetObjectItem(report, "cluster_id");
-            cJSON *attr_id = cJSON_GetObjectItem(report, "attr_id");
-            cJSON *min_int = cJSON_GetObjectItem(report, "min_int");
-            cJSON *max_int = cJSON_GetObjectItem(report, "max_int");
-            
-            if (!cJSON_IsNumber(ep) || !cJSON_IsNumber(cluster_id) || 
-                !cJSON_IsNumber(attr_id) || !cJSON_IsNumber(min_int) || 
-                !cJSON_IsNumber(max_int)) {
-                ESP_LOGW(LOG_TAG, "Invalid report config %d", i);
+            cJSON *ep_json = cJSON_GetObjectItem(report, "ep");
+            cJSON *cluster_id_json = cJSON_GetObjectItem(report, "cluster_id");
+            cJSON *attr_id_json = cJSON_GetObjectItem(report, "attr_id");
+            cJSON *direction_json = cJSON_GetObjectItem(report, "direction");
+
+            if (!cJSON_IsNumber(ep_json) || !cJSON_IsNumber(cluster_id_json) || 
+                !cJSON_IsNumber(attr_id_json) || !cJSON_IsNumber(direction_json)) {
+                ESP_LOGW(LOG_TAG, "Invalid common report config fields for report %d", i);
                 continue;
             }
             
             device->report_cfgs[i].in_use = true;
-            device->report_cfgs[i].ep = (uint8_t)ep->valuedouble;
-            device->report_cfgs[i].cluster_id = (uint16_t)cluster_id->valuedouble;
-            device->report_cfgs[i].attr_id = (uint16_t)attr_id->valuedouble;
-            device->report_cfgs[i].min_int = (uint16_t)min_int->valuedouble;
-            device->report_cfgs[i].max_int = (uint16_t)max_int->valuedouble;
+            device->report_cfgs[i].direction = (uint8_t)direction_json->valuedouble;
+            device->report_cfgs[i].ep = (uint8_t)ep_json->valuedouble;
+            device->report_cfgs[i].cluster_id = (uint16_t)cluster_id_json->valuedouble;
+            device->report_cfgs[i].attr_id = (uint16_t)attr_id_json->valuedouble;
+
+            if (device->report_cfgs[i].direction == REPORT_CFG_DIRECTION_SEND) {
+                cJSON *attr_type_json = cJSON_GetObjectItem(report, "attr_type");
+                cJSON *min_int_json = cJSON_GetObjectItem(report, "min_int");
+                cJSON *max_int_json = cJSON_GetObjectItem(report, "max_int");
+                cJSON *rc_val_json = cJSON_GetObjectItem(report, "reportable_change_val"); // Optional
+
+                if (!cJSON_IsNumber(attr_type_json) || !cJSON_IsNumber(min_int_json) || !cJSON_IsNumber(max_int_json)) {
+                    ESP_LOGW(LOG_TAG, "Invalid send_cfg fields for report %d", i);
+                    device->report_cfgs[i].in_use = false; // Mark as invalid
+                    continue;
+                }
+                device->report_cfgs[i].send_cfg.attr_type = (uint8_t)attr_type_json->valuedouble;
+                device->report_cfgs[i].send_cfg.min_int = (uint16_t)min_int_json->valuedouble;
+                device->report_cfgs[i].send_cfg.max_int = (uint16_t)max_int_json->valuedouble;
+                if (rc_val_json && cJSON_IsNumber(rc_val_json)) {
+                    device->report_cfgs[i].send_cfg.reportable_change_val = (uint32_t)rc_val_json->valuedouble;
+                } else {
+                    device->report_cfgs[i].send_cfg.reportable_change_val = 0xFFFFFFFF; // Mark as not set
+                }
+            } else if (device->report_cfgs[i].direction == REPORT_CFG_DIRECTION_RECV) {
+                cJSON *timeout_json = cJSON_GetObjectItem(report, "timeout_period");
+                if (!cJSON_IsNumber(timeout_json)) {
+                    ESP_LOGW(LOG_TAG, "Invalid recv_cfg fields for report %d", i);
+                    device->report_cfgs[i].in_use = false; // Mark as invalid
+                    continue;
+                }
+                device->report_cfgs[i].recv_cfg.timeout_period = (uint16_t)timeout_json->valuedouble;
+            } else {
+                ESP_LOGW(LOG_TAG, "Unknown direction %d for report %d", device->report_cfgs[i].direction, i);
+                device->report_cfgs[i].in_use = false; // Mark as invalid
+                continue;
+            }
         }
     }
     

@@ -39,7 +39,7 @@ DP_TEMP_CALIBRATION = 0x65
 DP_VALVE_POSITION = 0x6C
 DP_COMFORT_MODE = 0x72
 
-DataPoints
+#DataPoints
 MOES_DP_CONFIG = {
     DP_SYSTEM_MODE: {
         'name': 'system_mode',
