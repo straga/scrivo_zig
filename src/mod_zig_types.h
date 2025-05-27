@@ -105,6 +105,7 @@ typedef struct {
 typedef struct {
     uint16_t short_addr;                            // Short address of the device
     uint8_t ieee_addr[8];                           // IEEE address as byte array
+    char ieee_addr_str[24];                         // Formatted IEEE address string (e.g., "XX:XX:XX:XX:XX:XX:XX:XX\0")
     uint8_t endpoint_count;                         // Number of endpoints
     zigbee_endpoint_t endpoints[MAX_ENDPOINTS];     // Array of endpoints
     report_cfg_t report_cfgs[MAX_REPORT_CFGS];      // Array of report configurations
@@ -131,8 +132,8 @@ typedef struct {
 
 // Structure for Zigbee messages
 typedef struct {
-    uint8_t msg_py;         // Micropython Message type
-    uint8_t signal_type;    // Signal type
+    uint16_t msg_py;         // Micropython Message type
+    uint16_t signal_type;    // Signal type
     uint16_t src_addr;      // Source address
     uint8_t endpoint;       // Endpoint
     uint16_t cluster_id;    // Cluster ID

@@ -25,4 +25,7 @@ void bind_cb(esp_zb_zdp_status_t status, void *user_ctx);
 void send_msg_to_micropython_queue(uint8_t msg_py, uint16_t signal_type, uint16_t src_addr, uint8_t endpoint, 
                                  uint16_t cluster_id, uint8_t *data, uint8_t data_len);
 
+// Callback for ZDO binding table response, used by Python wrapper
+void binding_table_cb(const esp_zb_zdo_binding_table_info_t *table_info, void *user_ctx);
+
 #endif /* MOD_ZIG_HANDLERS_H */

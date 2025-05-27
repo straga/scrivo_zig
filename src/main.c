@@ -305,6 +305,8 @@ static const mp_rom_map_elem_t esp32_zig_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_read_attr), MP_ROM_PTR(&esp32_zig_read_attr_obj) },
     { MP_ROM_QSTR(MP_QSTR_write_attr), MP_ROM_PTR(&esp32_zig_write_attr_obj) },
 
+    { MP_ROM_QSTR(MP_QSTR_get_binding_table), MP_ROM_PTR(&esp32_zig_get_binding_table_obj) },
+
     // Message type constants
     { MP_ROM_QSTR(MP_QSTR_MSG), MP_ROM_PTR(&zig_msg_module) },
 

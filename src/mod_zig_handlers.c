@@ -62,8 +62,8 @@ void send_msg_to_micropython_queue(uint8_t msg_py, uint16_t signal_type, uint16_
     if (self->message_queue) {
 
         // Log event to ESP-IDF console
-        ESP_LOGI(HANDLERS_TAG, "Event->Py addr=0x%04x ep=%u cid=0x%04x len=%u",
-                 src_addr, endpoint, cluster_id, data_len);
+        ESP_LOGI(HANDLERS_TAG, "Event->Py addr=0x%04x ep=%u cid=0x%04x len=%u sig=0x%04x", 
+                 src_addr, endpoint, cluster_id, data_len, signal_type);
 
         zigbee_message_t msg;
         msg.msg_py = msg_py;
@@ -411,20 +411,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
     ESP_LOGI(HANDLERS_TAG, "HANDLER: ID: %d - %s", sig_type, esp_err_to_name(err_status));
 
 
-    coord_short = esp_zb_get_short_address();
-    send_msg_to_micropython_queue(
-        ZIG_MSG_ZB_APP_SIGNAL_HANDLER,       // msg_py
-        sig_type,                            // signal_type
-        coord_short,
-        0xFE,                                // special endpoint for network event
-        0xFFFE,                              // special cluster_id for network formed
-        (uint8_t*)&err_status,                // data
-        sizeof(err_status)                    // data_len
-    );
-    
-
-
-
     switch (sig_type) {
         case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP: {
             ESP_LOGI(HANDLERS_TAG, "CASE: Init Zigbee stack");
@@ -501,12 +487,11 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
         }
             
         case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE: {
-            ESP_LOGI(HANDLERS_TAG, "CASE: New device connected");
-
-            // Device announcement parameters
             esp_zb_zdo_signal_device_annce_params_t *dev_annce_params = 
                 (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(signal_struct->p_app_signal);
-            ESP_LOGI(HANDLERS_TAG, "CASE: New device announce short=0x%04x", dev_annce_params->device_short_addr);
+            char temp_ieee_str[24];
+            zigbee_format_ieee_addr_to_str(dev_annce_params->ieee_addr, temp_ieee_str, sizeof(temp_ieee_str));
+            ESP_LOGI(HANDLERS_TAG, "New device announcement: 0x%04x (IEEE: %s)", dev_annce_params->device_short_addr, temp_ieee_str);
 
             // Find or add device using device manager
             esp_err_t err = device_manager_add(dev_annce_params->device_short_addr, dev_annce_params->ieee_addr, MP_OBJ_FROM_PTR(zb_obj), false);
@@ -657,25 +642,47 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             esp_zb_zdo_signal_device_update_params_t *update_params = 
                 (esp_zb_zdo_signal_device_update_params_t *)esp_zb_app_signal_get_params(signal_struct->p_app_signal);
             
-            ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device update: 0x%04x, status: %d", 
-                update_params->short_addr, update_params->status);
+            char ieee_from_signal_str[24];
+            zigbee_format_ieee_addr_to_str(update_params->long_addr, ieee_from_signal_str, sizeof(ieee_from_signal_str));
 
-// Get device
+            ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device update signal: short=0x%04x, IEEE_in_signal=%s, status=%d", 
+                update_params->short_addr, ieee_from_signal_str, update_params->status);
+
             zigbee_device_t *device = device_manager_get(update_params->short_addr);
             if (!device) {
-                ESP_LOGW(HANDLERS_TAG, "Device not found: 0x%04x", update_params->short_addr);
-                break;
-            }
+                ESP_LOGW(HANDLERS_TAG, "Device not found by short_addr=0x%04x for device update signal. IEEE from signal was %s. Attempting to add and interview.", 
+                         update_params->short_addr, ieee_from_signal_str);
+                
+                // Attempt to add this device to the manager as it's clearly communicating
+                esp_err_t add_err = device_manager_add(update_params->short_addr, update_params->long_addr, MP_OBJ_FROM_PTR(zb_obj), false);
+                if (add_err == ESP_OK || add_err == ESP_ERR_INVALID_STATE) { // ESP_ERR_INVALID_STATE might mean it was already added by a concurrent event or handled conflict
+                    ESP_LOGI(HANDLERS_TAG, "Added/Processed device 0x%04x (IEEE: %s) from Device Update signal. Requesting Active EPs.", 
+                             update_params->short_addr, ieee_from_signal_str);
+                    
+                    // Request active endpoints to start interview process
+                    esp_zb_zdo_active_ep_req_param_t active_ep_req = {
+                        .addr_of_interest = update_params->short_addr
+                    };
+                    esp_zb_zdo_active_ep_req(&active_ep_req, active_ep_cb, (void*)(uintptr_t)update_params->short_addr);
+                } else {
+                    ESP_LOGE(HANDLERS_TAG, "Failed to add device 0x%04x (IEEE: %s) from Device Update signal. Error: %s. Cannot interview.", 
+                             update_params->short_addr, ieee_from_signal_str, esp_err_to_name(add_err));
+                }
+            } else {
+                ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device update for known device: short=0x%04x (signal IEEE=%s, stored IEEE=%s), signal_status=%d",
+                         device->short_addr, ieee_from_signal_str, device->ieee_addr_str, update_params->status);
+                
+                // Важно: Проверить, совпадает ли IEEE из сигнала с сохраненным для этого short_addr
+                if (memcmp(device->ieee_addr, update_params->long_addr, sizeof(esp_zb_ieee_addr_t)) != 0) {
+                    ESP_LOGW(HANDLERS_TAG, "IEEE MISMATCH for short_addr 0x%04x! Signal reports IEEE %s, but manager has %s.",
+                             device->short_addr, ieee_from_signal_str, device->ieee_addr_str);
+                    // Здесь может потребоваться дополнительная логика для разрешения конфликта,
+                    // например, обновить IEEE в device_manager или пометить устройство как подозрительное.
+                    // Пока просто логируем.
+                }
 
-// Update last_seen
-            device->last_seen = esp_timer_get_time() / 1000;
-
-// Remove automatic saving when updating device
-            if ((update_params->status == 0x00 || update_params->status == 0x03) &&
-                device->manufacturer_name[0] != '\0' && 
-                device->device_name[0] != '\0') {
-                ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device 0x%04x updated after secure rejoin", 
-                    update_params->short_addr);
+                device->last_seen = esp_timer_get_time() / 1000;
+                // Дополнительная логика обработки статуса или сохранения здесь, если необходимо.
             }
             break;
         }
@@ -687,6 +694,20 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             ESP_LOGI(HANDLERS_TAG, "HANDLER: Signal struct params: %p", signal_struct->p_app_signal);
             ESP_LOGI(HANDLERS_TAG, "HANDLER: Signal struct params value: %lu", (unsigned long)*signal_struct->p_app_signal);
             ESP_LOGI(HANDLERS_TAG, "HANDLER: Signal struct params value (hex): 0x%08lx", (unsigned long)*signal_struct->p_app_signal);
+
+
+            coord_short = esp_zb_get_short_address();
+            send_msg_to_micropython_queue(
+                ZIG_MSG_ZB_APP_SIGNAL_HANDLER,       // msg_py
+                sig_type,                            // signal_type
+                coord_short,
+                0xFE,                                // special endpoint for network event
+                0xFFFE,                              // special cluster_id for network formed
+                (uint8_t*)&err_status,               // data
+                sizeof(err_status)                   // data_len
+            );
+
+
             break;
         }
     }
@@ -1053,3 +1074,33 @@ bool zb_raw_cmd_handler(uint8_t bufid)
     zb_zcl_send_default_handler(bufid, cmd_info, ZB_ZCL_STATUS_SUCCESS);
     return true;
 }
+
+
+
+// Callback for ZDO binding table response
+void binding_table_cb(const esp_zb_zdo_binding_table_info_t *table_info, void *user_ctx) {
+    uint16_t short_addr = (uint16_t)(uintptr_t)user_ctx;
+    ESP_LOGI(HANDLERS_TAG, "Binding table response for 0x%04x: total=%d, count=%d",
+             short_addr, table_info->total, table_info->count);
+    // Iterate through all records
+    esp_zb_zdo_binding_table_record_t *rec = table_info->record;
+    while (rec) {
+        // Format source and destination addresses
+        char src_str[24];
+        char dst_str[32];
+        zigbee_format_ieee_addr_to_str(rec->src_address, src_str, sizeof(src_str));
+        if (rec->dst_addr_mode == ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED) {
+            zigbee_format_ieee_addr_to_str(rec->dst_address.addr_long, dst_str, sizeof(dst_str));
+        } else {
+            snprintf(dst_str, sizeof(dst_str), "short=0x%04x", rec->dst_address.addr_short);
+        }
+        // Build record string
+        char record_str[128];
+        snprintf(record_str, sizeof(record_str),
+            "%s ep=%u cluster=0x%04x -> %s ep=%u",
+            src_str, rec->src_endp, rec->cluster_id, dst_str, rec->dst_endp);
+        ESP_LOGI(HANDLERS_TAG, "Binding record: %s", record_str);
+        rec = rec->next;
+    }
+}
+

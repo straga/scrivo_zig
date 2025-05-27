@@ -27,6 +27,9 @@ extern const mp_obj_fun_builtin_var_t esp32_zig_set_report_config_obj;          
 extern const mp_obj_fun_builtin_var_t esp32_zig_read_attr_obj;                   // Read attribute from device
 extern const mp_obj_fun_builtin_var_t esp32_zig_write_attr_obj;                  // Write attribute to device
 
+extern const mp_obj_fun_builtin_var_t esp32_zig_get_binding_table_obj;            // Get binding table from device
+    
+
 
 
 // Global variables 

@@ -459,3 +459,31 @@ static mp_obj_t esp32_zig_reset_to_factory(mp_obj_t self_in) {
 }
 
 MP_DEFINE_CONST_FUN_OBJ_1(esp32_zig_reset_to_factory_obj, esp32_zig_reset_to_factory);
+
+// Utility function to format an IEEE address byte array into a string
+void zigbee_format_ieee_addr_to_str(const uint8_t ieee_addr[8], char *out_str, size_t out_str_len) {
+    if (!out_str || out_str_len < 24) { // Minimum length for "XX:XX:XX:XX:XX:XX:XX:XX\0"
+        return; 
+    }
+    snprintf(out_str, out_str_len,
+             "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+             ieee_addr[0], ieee_addr[1], ieee_addr[2], ieee_addr[3],
+             ieee_addr[4], ieee_addr[5], ieee_addr[6], ieee_addr[7]);
+}
+
+// Utility function to parse an IEEE address string into a byte array
+bool zigbee_parse_ieee_str_to_addr(const char *ieee_str, uint8_t out_addr[8]) {
+    if (!ieee_str || !out_addr) {
+        return false;
+    }
+    unsigned int bytes[8];
+    if (sscanf(ieee_str, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+               &bytes[0], &bytes[1], &bytes[2], &bytes[3],
+               &bytes[4], &bytes[5], &bytes[6], &bytes[7]) == 8) {
+        for (int i = 0; i < 8; i++) {
+            out_addr[i] = (uint8_t)bytes[i];
+        }
+        return true;
+    }
+    return false;
+}

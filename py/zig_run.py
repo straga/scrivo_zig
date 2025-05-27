@@ -50,7 +50,9 @@ def convert_zcl_data(data_bytes, data_type):
             return struct.unpack('<I', data_bytes)[0]
         elif data_type == ZCL_ATTR_TYPE.ESP_ZB_ZCL_ATTR_TYPE_S32:  # signed int
             return struct.unpack('<i', data_bytes)[0]
-        # Обработка BITMAP типов как беззнаковых целых
+        elif data_type == ZCL_ATTR_TYPE.ESP_ZB_ZCL_ATTR_TYPE_BOOL:  # boolean
+            return data_bytes[0]  # Returns 0 or 1
+        # Convert BITMAP types to unsigned integers
         elif data_type == ZCL_ATTR_TYPE.ESP_ZB_ZCL_ATTR_TYPE_8BITMAP:
             return data_bytes[0]
         elif data_type == ZCL_ATTR_TYPE.ESP_ZB_ZCL_ATTR_TYPE_16BITMAP:
@@ -58,10 +60,12 @@ def convert_zcl_data(data_bytes, data_type):
         elif data_type == ZCL_ATTR_TYPE.ESP_ZB_ZCL_ATTR_TYPE_32BITMAP:
             return struct.unpack('<I', data_bytes)[0]
         else:
-            return data_bytes.hex()
+            # Return None instead of hex string for unknown types
+            print(f"    Debug: Unknown data_type 0x{data_type:02x}, returning None")
+            return None
     except struct.error as e:
         print(f"    Debug: struct error: {e}")
-        return data_bytes.hex()
+        return None
     
 
 ZCL_CLUSTER_ATTRS = {
@@ -75,6 +79,28 @@ ZCL_CLUSTER_ATTRS = {
             "name": "Battery Percentage Remaining",
             "convert": lambda x: x / 2.0,
             "unit": "%"
+        },
+    },
+    0x0006: {  # On/Off
+        0x0000: {
+            "name": "OnOff",
+            "convert": lambda x: "ON" if x else "OFF",
+            "unit": ""
+        },
+        0x4000: {
+            "name": "Global Scene Control",
+            "convert": lambda x: "Enabled" if x else "Disabled",
+            "unit": ""
+        },
+        0x4001: {
+            "name": "On Time",
+            "convert": lambda x: x,
+            "unit": "1/10 seconds"
+        },
+        0x4002: {
+            "name": "Off Wait Time",
+            "convert": lambda x: x,
+            "unit": "1/10 seconds"
         },
     },
     0x0500: {  # IAS Zone
@@ -160,6 +186,47 @@ def parse_attribute(cluster_id, data):
 
 
 
+
+ZCL_CLUSTER_COMMANDS = {
+    0x0006: {  # On/Off cluster
+        0x00: "OFF",
+        0x01: "ON", 
+        0x02: "TOGGLE"
+    },
+    0x0008: {  # Level Control cluster
+        0x00: "MOVE_TO_LEVEL",
+        0x01: "MOVE",
+        0x02: "STEP",
+        0x03: "STOP",
+        0x04: "MOVE_TO_LEVEL_WITH_ON_OFF",
+        0x05: "MOVE_WITH_ON_OFF",
+        0x06: "STEP_WITH_ON_OFF",
+        0x07: "STOP_WITH_ON_OFF"
+    }
+}
+
+def parse_command_response(cid, data):
+    """Parse command response data"""
+    if len(data) < 2:
+        return {"error": "Not enough data", "raw_data": data.hex()}
+    
+    status = data[0]
+    cmd_id = data[1]
+    status_str = "SUCCESS" if status == 0 else f"FAILED(0x{status:02x})"
+    
+    # Get command name from cluster commands
+    cluster_commands = ZCL_CLUSTER_COMMANDS.get(cid, {})
+    cmd_name = cluster_commands.get(cmd_id, f"CMD_0x{cmd_id:02x}")
+    
+    return {
+        "command": cmd_name,
+        "status": status_str,
+        "raw_status": status,
+        "command_id": cmd_id
+    }
+
+
+
 def handle_raw_command(data):
 
     cmd_id = data[0]
@@ -219,10 +286,10 @@ def on_msg(any):
             elif msg_py == ZIG.MSG.ZB_ACTION_HANDLER:
                 action_name = ZCL_ACTION_CALLBACK.get_type(signal_type)
                 print("  Action Handler Details:")
-                print(f"    Action Type: {action_name} ({signal_type})")
+                print(f"    Action Type: {action_name} ({signal_type})") 
                 
                 # Parse attribute data for SET_ATTR_VALUE callbacks
-                if signal_type == ZCL_ACTION_CALLBACK.ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID and data:
+                if signal_type == ZCL_ACTION_CALLBACK.ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID: # 0000
                     print("  Attribute Update Details:")
                     try:
                         result = parse_attribute(cid, data)
@@ -236,6 +303,32 @@ def on_msg(any):
                             print(f"    Unit: {result.get('unit', 'N/A')}")
                     except Exception as e:
                         print(f"      Exception in parse_attribute: {e}")
+
+
+                # Parse attribute reports for ESP_ZB_CORE_REPORT_ATTR_CB_ID
+                elif signal_type == ZCL_ACTION_CALLBACK.ESP_ZB_CORE_REPORT_ATTR_CB_ID:  # 8192
+                    print("  Attribute Report Details:")
+                    try:
+                        result = parse_attribute(cid, data)
+                        if result and "error" not in result:
+                            print(f"    Attribute ID: {result.get('attribute_id', 'N/A')}")
+                            print(f"    Attribute Name: {result.get('name', 'N/A')}")
+                            print(f"    Value: {result.get('value', 'N/A')} {result.get('unit', '')}")
+                            print(f"    Data Type: {result.get('data_type', 'N/A')}")
+                        else:
+                            print(f"    Parse Error: {result.get('error', 'Unknown error')}")
+                    except Exception as e:
+                        print(f"      Exception in parse_attribute: {e}")
+
+                # Parse command response for ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID
+                elif signal_type == ZCL_ACTION_CALLBACK.ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: # 4101
+                    print("  Command Response Details:")
+                    result = parse_command_response(cid, data)
+                    if "error" not in result:
+                        print(f"    Command: {result['command']}")
+                        print(f"    Status: {result['status']}")
+                    else:
+                        print(f"    Parse Error: {result['error']}")
 
 
             if msg_py == ZIG.MSG.RAW:

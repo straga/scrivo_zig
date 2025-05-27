@@ -216,13 +216,13 @@ MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_send_command_obj, 1, esp32_zig_send_command
 
 
 static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    enum {
-        ARG_addr, ARG_ep, ARG_cl
-    };
+    enum { ARG_addr, ARG_ep, ARG_cl, ARG_dst_addr, ARG_dst_ep };
     static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_addr,    MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
-        { MP_QSTR_ep,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
-        { MP_QSTR_cl,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_addr,     MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_ep,       MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_cl,       MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_dst_addr, MP_ARG_INT,                  {.u_int = 0} },
+        { MP_QSTR_dst_ep,   MP_ARG_INT,                  {.u_int = ESP_ZB_GATEWAY_ENDPOINT} },
     };
 
     // Parse arguments
@@ -233,6 +233,8 @@ static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, 
     uint16_t addr = args[ARG_addr].u_int;
     uint8_t ep = args[ARG_ep].u_int;
     uint16_t cluster = args[ARG_cl].u_int;
+    uint16_t dst_short = args[ARG_dst_addr].u_int;
+    uint8_t dst_ep = args[ARG_dst_ep].u_int;
 
     // Validate arguments
     if (addr == 0) {
@@ -259,10 +261,23 @@ static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, 
     bind_req.cluster_id = cluster;
     bind_req.src_endp = ep;
     bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
+
+    // example of binding to coordinator
+    // esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
+    // bind_req.dst_endp = ESP_ZB_GATEWAY_ENDPOINT;
     
-    // Get coordinator's IEEE address as destination
-    esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
-    bind_req.dst_endp = ESP_ZB_GATEWAY_ENDPOINT;
+    // Set destination IEEE address and endpoint for device-to-device binding
+    if (dst_short != 0) {
+        zigbee_device_t *dst_dev = device_manager_get(dst_short);
+        if (!dst_dev) {
+            mp_raise_msg_varg(&mp_type_ValueError, "Destination device 0x%04x not found", dst_short);
+        }
+        memcpy(bind_req.dst_address_u.addr_long, dst_dev->ieee_addr, sizeof(bind_req.dst_address_u.addr_long));
+    } else {
+        // fallback to coordinator
+        esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
+    }
+    bind_req.dst_endp = dst_ep;
     bind_req.req_dst_addr = addr;
     
     // Allocate bind context for callback
@@ -278,8 +293,8 @@ static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, 
         .cluster_id = cluster 
     };
 
-    ESP_LOGI(ZIG_CMD_NAMESPACE, "Binding cluster: addr=0x%04x, ep=%d, cluster=0x%04x", 
-             addr, ep, cluster);
+    ESP_LOGI(ZIG_CMD_NAMESPACE, "Binding cluster: src=0x%04x ep=%d cluster=0x%04x -> dst=0x%04x ep=%d", 
+             addr, ep, cluster, dst_short ? dst_short : 0x0000, dst_ep);
                           
     // Send bind request
     ZB_LOCK();
@@ -350,8 +365,8 @@ static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *pos_ar
         { MP_QSTR_direction, MP_ARG_INT, {.u_int = REPORT_CFG_DIRECTION_SEND} }, // Default to SEND
         // Args for SEND direction (conditionally required/optional)
         { MP_QSTR_attr_type, MP_ARG_INT, {.u_int = 0} }, // Will be checked if direction is SEND
-        { MP_QSTR_min_interval, MP_ARG_INT, {.u_int = 300} },
-        { MP_QSTR_max_interval, MP_ARG_INT, {.u_int = 3600} },
+        { MP_QSTR_min_int, MP_ARG_INT, {.u_int = 300} },
+        { MP_QSTR_max_int, MP_ARG_INT, {.u_int = 3600} },
         { MP_QSTR_reportable_change, MP_ARG_INT, {.u_int = -1} }, // -1 signifies not set by user for SEND
         // Arg for RECV direction (conditionally required)
         { MP_QSTR_timeout,  MP_ARG_INT, {.u_int = 0xFFFF} }, // Marker for not set for RECV
@@ -644,6 +659,35 @@ static mp_obj_t esp32_zig_write_attr(size_t n_args, const mp_obj_t *pos_args, mp
 
 MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_read_attr_obj, 1, esp32_zig_read_attr);
 MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_write_attr_obj, 1, esp32_zig_write_attr);
+
+
+
+// Python API: request binding table from a device
+static mp_obj_t esp32_zig_get_binding_table(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_addr, ARG_start_index };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_addr,         MP_ARG_REQUIRED  | MP_ARG_INT },
+        { MP_QSTR_start_index,  MP_ARG_INT,      {.u_int = 0} },
+    };
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args,
+                     MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    uint16_t addr        = (uint16_t)args[ARG_addr].u_int;
+    uint8_t  start_index = (uint8_t) args[ARG_start_index].u_int;
+
+    esp_zb_zdo_mgmt_bind_param_t req = {
+        .start_index = start_index,
+        .dst_addr    = addr,
+    };
+
+    ZB_LOCK();
+    esp_zb_zdo_binding_table_req(&req, binding_table_cb, (void*)(uintptr_t)addr);
+    ZB_UNLOCK();
+
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_get_binding_table_obj, 1, esp32_zig_get_binding_table);
 
 
 

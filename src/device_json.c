@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "device_json.h"
 #include "device_manager.h"
+#include "mod_zig_core.h" // For zigbee_format_ieee_addr_to_str and zigbee_parse_ieee_str_to_addr
 
 #define LOG_TAG "DEVICE_JSON"
 
@@ -47,15 +48,16 @@ cJSON* device_to_json(const zigbee_device_t *device) {
     snprintf(short_addr_str, sizeof(short_addr_str), "0x%04x", device->short_addr);
     cJSON_AddStringToObject(json, "short_addr", short_addr_str);
     
-    // IEEE address as hex string
-    char ieee_addr_str[24];
-    snprintf(ieee_addr_str, sizeof(ieee_addr_str), 
-             "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
-             device->ieee_addr[0], device->ieee_addr[1],
-             device->ieee_addr[2], device->ieee_addr[3],
-             device->ieee_addr[4], device->ieee_addr[5],
-             device->ieee_addr[6], device->ieee_addr[7]);
-    cJSON_AddStringToObject(json, "ieee_addr", ieee_addr_str);
+    // IEEE address as hex string - now directly use the pre-formatted string from the device struct
+    if (device->ieee_addr_str[0] == '\0') {
+        // Fallback if string is not formatted (should not happen with new logic but good for safety)
+        ESP_LOGW(LOG_TAG, "IEEE string for 0x%04x is not pre-formatted, formatting now.", device->short_addr);
+        char temp_ieee_str[24];
+        zigbee_format_ieee_addr_to_str(device->ieee_addr, temp_ieee_str, sizeof(temp_ieee_str));
+        cJSON_AddStringToObject(json, "ieee_addr", temp_ieee_str);
+    } else {
+        cJSON_AddStringToObject(json, "ieee_addr", device->ieee_addr_str);
+    }
     
     // Add other device properties
     cJSON_AddBoolToObject(json, "active", device->active);
@@ -173,37 +175,54 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t 
     memset(device, 0, sizeof(zigbee_device_t));
     
     // Get short address as hex string
-    cJSON *short_addr = cJSON_GetObjectItem(json, "short_addr");
-    if (!cJSON_IsString(short_addr)) {
+    cJSON *short_addr_item = cJSON_GetObjectItem(json, "short_addr"); // Renamed for clarity
+    if (!cJSON_IsString(short_addr_item)) {
         ESP_LOGE(LOG_TAG, "Invalid short_addr type, expected string");
         return ESP_ERR_INVALID_ARG;
     }
-    
-    if (sscanf(short_addr->valuestring, "0x%hx", &device->short_addr) != 1) {
-        ESP_LOGE(LOG_TAG, "Failed to parse short_addr");
+    // Temporarily store parsed short_addr for logging before assigning to device->short_addr
+    uint16_t parsed_short_addr_val = 0;
+    if (sscanf(short_addr_item->valuestring, "0x%hx", &parsed_short_addr_val) != 1) {
+        ESP_LOGE(LOG_TAG, "Failed to parse short_addr string: '%s'", short_addr_item->valuestring);
         return ESP_ERR_INVALID_ARG;
     }
+    device->short_addr = parsed_short_addr_val; // Assign after successful parse
     
     // Get IEEE address as MAC-style string with colons
-    cJSON *ieee_addr = cJSON_GetObjectItem(json, "ieee_addr");
-    if (!cJSON_IsString(ieee_addr)) {
-        ESP_LOGE(LOG_TAG, "Invalid ieee_addr type, expected string");
+    cJSON *ieee_addr_item = cJSON_GetObjectItem(json, "ieee_addr"); 
+    if (!cJSON_IsString(ieee_addr_item)) {
+        ESP_LOGE(LOG_TAG, "Invalid ieee_addr type for 0x%04x, expected string", device->short_addr);
         return ESP_ERR_INVALID_ARG;
     }
-    
+
+    ESP_LOGI(LOG_TAG, "JSON PARSE: Attempting to process device from JSON: short_addr_str='%s' (parsed 0x%04x), ieee_addr_str='%s'", 
+             short_addr_item->valuestring, device->short_addr, ieee_addr_item->valuestring);
+
     // Parse MAC address format (xx:xx:xx:xx:xx:xx:xx:xx)
-    unsigned int bytes[8];
-    if (sscanf(ieee_addr->valuestring, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
-               &bytes[0], &bytes[1], &bytes[2], &bytes[3],
-               &bytes[4], &bytes[5], &bytes[6], &bytes[7]) != 8) {
-        ESP_LOGE(LOG_TAG, "Failed to parse ieee_addr");
+    if (!zigbee_parse_ieee_str_to_addr(ieee_addr_item->valuestring, device->ieee_addr)) {
+        ESP_LOGE(LOG_TAG, "Failed to parse ieee_addr string: '%s' for short_addr 0x%04x", 
+                 ieee_addr_item->valuestring, device->short_addr);
         return ESP_ERR_INVALID_ARG;
     }
     
-    for (int i = 0; i < 8; i++) {
-        device->ieee_addr[i] = (uint8_t)bytes[i];
+    // Call device_manager_add to handle potential new device or update short_addr for existing IEEE
+    // This is now called unconditionally for every JSON entry during initial load.
+    // device_manager_add will itself decide if a new entry is needed in the list or if an existing one is updated.
+    esp_err_t add_err = device_manager_add(device->short_addr, device->ieee_addr, zig_obj_mp, true);
+    if (add_err != ESP_OK && add_err != ESP_ERR_NO_MEM && add_err != ESP_ERR_INVALID_STATE) {
+        // ESP_ERR_NO_MEM means list is full. ESP_ERR_INVALID_STATE can mean non-critical conflict handled by add.
+        // Other errors are more critical for parsing this JSON.
+        ESP_LOGE(LOG_TAG, "device_manager_add failed during device_from_json for 0x%04x (IEEE: %s) with error: %s. JSON data might not be fully applied.",
+                 device->short_addr, ieee_addr_item->valuestring, esp_err_to_name(add_err));
+        // Depending on severity, might want to return add_err here
+        // For now, let it proceed to device_manager_update which will target the prepared slot or existing device.
+    } else if (add_err == ESP_ERR_NO_MEM) {
+        ESP_LOGE(LOG_TAG, "Device list full, cannot process JSON for 0x%04x (IEEE: %s)", device->short_addr, ieee_addr_item->valuestring);
+        return ESP_ERR_NO_MEM; // Hard fail if list is full
     }
-    
+    // If add_err is ESP_ERR_INVALID_STATE, it means device_manager_add handled a conflict (e.g. short_addr taken by different IEEE)
+    // and decided not to add/update short_addr. We can still proceed to update other attributes if the device (by old short_addr or IEEE) exists.
+        
     // Get basic info with safe defaults
     cJSON *active = cJSON_GetObjectItem(json, "active");
     device->active = cJSON_IsBool(active) ? cJSON_IsTrue(active) : false;
@@ -213,16 +232,6 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t 
     
     // Get string fields with bounds checking
     cJSON *device_name = cJSON_GetObjectItem(json, "device_name");
-    
-    // Check if device exists, if not - add it
-    zigbee_device_t *existing = device_manager_get(device->short_addr);
-    if (!existing) {
-        esp_err_t err = device_manager_add(device->short_addr, device->ieee_addr, zig_obj_mp, true);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGE(LOG_TAG, "Failed to add device 0x%04x via device_from_json: %s", device->short_addr, esp_err_to_name(err));
-            return err;
-        }
-    }
     
     if (cJSON_IsString(device_name)) {
         strncpy(device->device_name, device_name->valuestring, sizeof(device->device_name)-1);
