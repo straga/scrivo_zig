@@ -25,6 +25,7 @@
 #include "py/mphal.h"
 #include "py/mperrno.h"
 #include "py/mpthread.h"
+#include "py/gc.h"
 
 // ESP-IDF headers
 #include "esp_idf_version.h"
@@ -68,13 +69,14 @@
 
 esp32_zig_config_t zig_config = {0};  // Initialize with zeros
 
-esp32_zig_obj_t esp32_zig_obj = {
-    {&machine_zig_type},
-    .config = &zig_config,
-};
+// Global pointer to main object for GC root registration
+mp_obj_t global_esp32_zig_obj_ptr = MP_OBJ_FROM_PTR(NULL);
+
 
 // main init function
 mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    // Обновляем глобальный указатель
+    global_esp32_zig_obj_ptr = MP_OBJ_FROM_PTR(self);
 
     enum { ARG_name, ARG_bitrate, ARG_rcp_reset_pin, ARG_rcp_boot_pin, ARG_uart_port, ARG_uart_rx_pin, ARG_uart_tx_pin, ARG_start, ARG_storage };
 
@@ -109,11 +111,12 @@ mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, const mp_ob
 
     // Set storage callback
     self->storage_cb = args[ARG_storage].u_obj;
+    device_storage_set_callback(self->storage_cb);
 
     // load all devices from separate files
     esp_err_t dev_loaded = device_storage_load_all(self);
     if (dev_loaded != ESP_OK) {
-        mp_printf(&mp_plat_print, "ZFailed to loading devices: '%s')", esp_err_to_name(dev_loaded));
+        mp_printf(&mp_plat_print, "Json load failed to loading devices: '%s')", esp_err_to_name(dev_loaded));
         // not critical error, continue with empty device list
     }
 
@@ -154,7 +157,30 @@ static mp_obj_t esp32_zig_make_new(const mp_obj_type_t *type, size_t n_args, siz
     // Simplified argument check
     mp_arg_check_num(n_args, n_kw, 0, MP_OBJ_FUN_ARGS_MAX, true);
 
-    esp32_zig_obj_t *self = &esp32_zig_obj;
+    if (global_esp32_zig_obj_ptr != NULL) {
+        esp32_zig_obj_t *zig_self = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+        if (!zig_self) {
+            mp_raise_msg(&mp_type_RuntimeError, "Invalid zig_self pointer");
+            return mp_const_none;
+        }
+        mp_printf(&mp_plat_print, "ZIG device already initialized (name='%s')\n", 
+                    zig_self->config->general);
+        return MP_OBJ_FROM_PTR(global_esp32_zig_obj_ptr);
+    }
+
+    // Create new object
+    esp32_zig_obj_t *self = m_new_obj(esp32_zig_obj_t);
+    self->base.type = type;
+    self->config = &zig_config;
+    self->storage_cb = mp_const_none;
+    self->rx_callback = mp_const_none;
+    self->tx_callback = mp_const_none;
+    self->irq_handler = NULL;
+    self->gateway_task = NULL;
+    self->message_queue = NULL;
+
+    // Update global pointer
+    global_esp32_zig_obj_ptr = MP_OBJ_FROM_PTR(self);
 
     // Create message queue immediately to not miss Zigbee events
     if (self->message_queue == NULL) {
@@ -164,35 +190,12 @@ static mp_obj_t esp32_zig_make_new(const mp_obj_type_t *type, size_t n_args, siz
         }
     }
 
-    // If there are arguments, pass them to init_helper
-    if (n_args > 0 || n_kw > 0) {
-        if (self->config->network_formed) {
-            // The caller is requesting a reconfiguration of the hardware
-            // this can only be done if the hardware is in init mode
-            //zig_deinit(self);
-            // mp_raise_msg(&mp_type_RuntimeError, "Device is already initialized");
-            // return mp_const_none;
 
-            mp_printf(&mp_plat_print, "ZIG device already initialized (name='%s')\n", 
-                     self->config->general);
-                     
-            return MP_OBJ_FROM_PTR(self);
-
-        }
-
-        
-        self->tx_callback = mp_const_none;
-        self->rx_callback = mp_const_none;
-        self->storage_cb = mp_const_none;
-        self->irq_handler = NULL;
-        self->gateway_task = NULL;
-
-        // start the peripheral
-        mp_map_t kw_args;
-        mp_map_init_fixed_table(&kw_args, n_kw, args + n_args);
-        esp32_zig_init_helper(self, n_args, args, &kw_args);
-        
-    }
+    // start the peripheral
+    mp_map_t kw_args;
+    mp_map_init_fixed_table(&kw_args, n_kw, args + n_args);
+    esp32_zig_init_helper(self, n_args, args, &kw_args);
+    
     
     return MP_OBJ_FROM_PTR(self);
 }
@@ -285,14 +288,15 @@ static const mp_rom_map_elem_t esp32_zig_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_scan_networks), MP_ROM_PTR(&esp32_zig_scan_networks_obj) },
     { MP_ROM_QSTR(MP_QSTR_start_network), MP_ROM_PTR(&esp32_zig_start_network_obj) },
     
-    // Device Management API
-    //{ MP_ROM_QSTR(MP_QSTR_get_device_list),             MP_ROM_PTR(&esp32_zig_get_device_list_obj)          }, // only shord id list
-    //{ MP_ROM_QSTR(MP_QSTR_get_device),                  MP_ROM_PTR(&esp32_zig_get_device_obj)               }, // get device by short id
+    //Device Management API
+    { MP_ROM_QSTR(MP_QSTR_get_device_list),             MP_ROM_PTR(&esp32_zig_get_device_list_obj)          }, // only short id list
+    { MP_ROM_QSTR(MP_QSTR_get_device),                  MP_ROM_PTR(&esp32_zig_get_device_obj)               }, // get device by short id
+    { MP_ROM_QSTR(MP_QSTR_get_device_summary),          MP_ROM_PTR(&esp32_zig_get_device_summary_obj)       }, // get summary fields
+    { MP_ROM_QSTR(MP_QSTR_save_device),                 MP_ROM_PTR(&esp32_zig_save_device_obj)              }, // save device to storage
+    { MP_ROM_QSTR(MP_QSTR_load_device),                 MP_ROM_PTR(&esp32_zig_load_device_obj)              }, // load device from storage
+    { MP_ROM_QSTR(MP_QSTR_remove_device),               MP_ROM_PTR(&esp32_zig_remove_device_obj)            }, // remove device from storage
 
-
-
-    // Micropython CMD API
-    
+    // Micropython CMD API    
     { MP_ROM_QSTR(MP_QSTR_send_command), MP_ROM_PTR(&esp32_zig_send_command_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_recv_callback), MP_ROM_PTR(&esp32_zig_set_recv_callback_obj) },
     { MP_ROM_QSTR(MP_QSTR_recv), MP_ROM_PTR(&esp32_zig_recv_obj) },
@@ -321,8 +325,8 @@ MP_DEFINE_CONST_OBJ_TYPE(
     MP_QSTR_ZIG,
     MP_TYPE_FLAG_NONE,
     make_new, esp32_zig_make_new,
-    print, esp32_zig_print,
-    locals_dict, (mp_obj_dict_t *)&esp32_zig_locals_dict
+    locals_dict, (mp_obj_dict_t *)&esp32_zig_locals_dict,
+    print, esp32_zig_print
 );
 
 MP_REGISTER_MODULE(MP_QSTR_ZIG, machine_zig_type);

@@ -49,6 +49,13 @@
 #define ZB_LOCK()   esp_zb_lock_acquire(portMAX_DELAY)
 #define ZB_UNLOCK() esp_zb_lock_release()
 
+// Forward declaration of global Zigbee object
+//extern esp32_zig_obj_t esp32_zig_obj;
+
+// Глобальный указатель на главный объект для регистрации в GC
+extern mp_obj_t global_esp32_zig_obj_ptr;
+MP_REGISTER_ROOT_POINTER(mp_obj_t global_esp32_zig_obj_ptr);
+
 // Zigbee type
 extern const mp_obj_type_t machine_zig_type;
 
@@ -56,10 +63,6 @@ extern const mp_obj_type_t machine_zig_type;
 extern mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, 
     const mp_obj_t *pos_args, mp_map_t *kw_args);
 extern esp_err_t esp32_zig_start_gateway(esp32_zig_obj_t *self);
-extern esp32_zig_obj_t esp32_zig_obj;
-
-// Device discovery initialization
-bool espz_init_device_discovery(esp32_zig_obj_t *self);
 
 // // Zigbee deinitialization
 // void deinit_zigbee(void);

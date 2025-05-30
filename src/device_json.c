@@ -59,9 +59,9 @@ cJSON* device_to_json(const zigbee_device_t *device) {
         cJSON_AddStringToObject(json, "ieee_addr", device->ieee_addr_str);
     }
     
-    // Add other device properties
-    cJSON_AddBoolToObject(json, "active", device->active);
-    cJSON_AddNumberToObject(json, "last_seen", device->last_seen);
+    // // Add other device properties
+    // cJSON_AddBoolToObject(json, "active", device->active);
+    // cJSON_AddNumberToObject(json, "last_seen", device->last_seen);
     
 // Clean strings from control characters before adding to JSON
     char clean_device_name[32];
@@ -78,10 +78,10 @@ cJSON* device_to_json(const zigbee_device_t *device) {
     cJSON_AddStringToObject(json, "device_name", clean_device_name);
     cJSON_AddStringToObject(json, "manufacturer_name", clean_manufacturer_name);
     cJSON_AddNumberToObject(json, "manufacturer_code", device->manufacturer_code);
-    cJSON_AddNumberToObject(json, "power_source", device->power_source);
-    cJSON_AddNumberToObject(json, "battery_voltage", device->battery_voltage);
-    cJSON_AddNumberToObject(json, "battery_percentage", device->battery_percentage);
-    cJSON_AddNumberToObject(json, "firmware_version", device->firmware_version);
+    // cJSON_AddNumberToObject(json, "power_source", device->power_source);
+    // cJSON_AddNumberToObject(json, "battery_voltage", device->battery_voltage);
+    // cJSON_AddNumberToObject(json, "battery_percentage", device->battery_percentage);
+    // cJSON_AddNumberToObject(json, "firmware_version", device->firmware_version);
 
     // Add endpoints array
     cJSON *endpoints = cJSON_AddArrayToObject(json, "endpoints");
@@ -205,30 +205,7 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t 
         return ESP_ERR_INVALID_ARG;
     }
     
-    // Call device_manager_add to handle potential new device or update short_addr for existing IEEE
-    // This is now called unconditionally for every JSON entry during initial load.
-    // device_manager_add will itself decide if a new entry is needed in the list or if an existing one is updated.
-    esp_err_t add_err = device_manager_add(device->short_addr, device->ieee_addr, zig_obj_mp, true);
-    if (add_err != ESP_OK && add_err != ESP_ERR_NO_MEM && add_err != ESP_ERR_INVALID_STATE) {
-        // ESP_ERR_NO_MEM means list is full. ESP_ERR_INVALID_STATE can mean non-critical conflict handled by add.
-        // Other errors are more critical for parsing this JSON.
-        ESP_LOGE(LOG_TAG, "device_manager_add failed during device_from_json for 0x%04x (IEEE: %s) with error: %s. JSON data might not be fully applied.",
-                 device->short_addr, ieee_addr_item->valuestring, esp_err_to_name(add_err));
-        // Depending on severity, might want to return add_err here
-        // For now, let it proceed to device_manager_update which will target the prepared slot or existing device.
-    } else if (add_err == ESP_ERR_NO_MEM) {
-        ESP_LOGE(LOG_TAG, "Device list full, cannot process JSON for 0x%04x (IEEE: %s)", device->short_addr, ieee_addr_item->valuestring);
-        return ESP_ERR_NO_MEM; // Hard fail if list is full
-    }
-    // If add_err is ESP_ERR_INVALID_STATE, it means device_manager_add handled a conflict (e.g. short_addr taken by different IEEE)
-    // and decided not to add/update short_addr. We can still proceed to update other attributes if the device (by old short_addr or IEEE) exists.
-        
-    // Get basic info with safe defaults
-    cJSON *active = cJSON_GetObjectItem(json, "active");
-    device->active = cJSON_IsBool(active) ? cJSON_IsTrue(active) : false;
-    
-    cJSON *last_seen = cJSON_GetObjectItem(json, "last_seen");
-    device->last_seen = cJSON_IsNumber(last_seen) ? (uint32_t)last_seen->valuedouble : 0;
+    //probaly check max device available
     
     // Get string fields with bounds checking
     cJSON *device_name = cJSON_GetObjectItem(json, "device_name");
@@ -250,21 +227,21 @@ esp_err_t device_from_json(const cJSON *json, zigbee_device_t *device, mp_obj_t 
     device->manufacturer_code = cJSON_IsNumber(manufacturer_code) ? 
                               (uint16_t)manufacturer_code->valuedouble : 0;
     
-    cJSON *power_source = cJSON_GetObjectItem(json, "power_source");
-    device->power_source = cJSON_IsNumber(power_source) ? 
-                          (uint8_t)power_source->valuedouble : 0;
+    // cJSON *power_source = cJSON_GetObjectItem(json, "power_source");
+    // device->power_source = cJSON_IsNumber(power_source) ? 
+    //                       (uint8_t)power_source->valuedouble : 0;
     
-    cJSON *battery_voltage = cJSON_GetObjectItem(json, "battery_voltage");
-    device->battery_voltage = cJSON_IsNumber(battery_voltage) ? 
-                            (uint16_t)battery_voltage->valuedouble : 0;
+    // cJSON *battery_voltage = cJSON_GetObjectItem(json, "battery_voltage");
+    // device->battery_voltage = cJSON_IsNumber(battery_voltage) ? 
+    //                         (uint16_t)battery_voltage->valuedouble : 0;
     
-    cJSON *battery_percentage = cJSON_GetObjectItem(json, "battery_percentage");
-    device->battery_percentage = cJSON_IsNumber(battery_percentage) ? 
-                               (uint8_t)battery_percentage->valuedouble : 0;
+    // cJSON *battery_percentage = cJSON_GetObjectItem(json, "battery_percentage");
+    // device->battery_percentage = cJSON_IsNumber(battery_percentage) ? 
+    //                            (uint8_t)battery_percentage->valuedouble : 0;
     
-    cJSON *firmware_version = cJSON_GetObjectItem(json, "firmware_version");
-    device->firmware_version = cJSON_IsNumber(firmware_version) ? 
-                             (uint32_t)firmware_version->valuedouble : 0;
+    // cJSON *firmware_version = cJSON_GetObjectItem(json, "firmware_version");
+    // device->firmware_version = cJSON_IsNumber(firmware_version) ? 
+    //                          (uint32_t)firmware_version->valuedouble : 0;
     
     // Get endpoints
     cJSON *endpoints = cJSON_GetObjectItem(json, "endpoints");

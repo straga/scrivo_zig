@@ -21,7 +21,17 @@ esp_err_t device_manager_init(void);
  * @param ieee_addr IEEE address of device
  * @return esp_err_t in case of success
  */
-esp_err_t device_manager_add(uint16_t new_short_addr, const uint8_t ieee_addr[8], mp_obj_t zig_obj_mp, bool initial_load_context);
+esp_err_t device_manager_add(uint16_t new_short_addr, const uint8_t ieee_addr[8], mp_obj_t zig_obj_mp);
+
+/**
+ * @brief Wrapper to add or update a device from external calls (e.g., JSON loader or Python)
+ *
+ * @param new_short_addr Short address of device
+ * @param ieee_addr IEEE address of device
+ * @param zig_obj_mp MicroPython ZigBee object pointer for storage callbacks
+ * @return esp_err_t
+ */
+esp_err_t device_manager_add_new_device(uint16_t new_short_addr, const uint8_t ieee_addr[8], mp_obj_t zig_obj_mp);
 
 /**
  * @brief Delete device

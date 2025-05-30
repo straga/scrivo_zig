@@ -15,18 +15,22 @@
 extern const mp_obj_fun_builtin_var_t esp32_zig_save_device_obj;
 extern const mp_obj_fun_builtin_var_t esp32_zig_load_device_obj;
 extern const mp_obj_fun_builtin_var_t esp32_zig_get_device_obj;
+extern const mp_obj_fun_builtin_var_t esp32_zig_get_device_list_obj;
+extern const mp_obj_fun_builtin_var_t esp32_zig_get_device_summary_obj;
+extern const mp_obj_fun_builtin_var_t esp32_zig_remove_device_obj;
+
+//extern const mp_obj_fun_builtin_var_t esp32_zig_get_binding_table_obj;            // Get binding table from device
+
 
 // Public Python API
 mp_obj_t esp32_zig_save_device(size_t n_args, const mp_obj_t *args);
 mp_obj_t esp32_zig_load_device(size_t n_args, const mp_obj_t *args);
 mp_obj_t esp32_zig_get_device(size_t n_args, const mp_obj_t *args);
+mp_obj_t esp32_zig_get_device_list(size_t n_args, const mp_obj_t *args);
+mp_obj_t esp32_zig_get_device_summary(size_t n_args, const mp_obj_t *args);
 
-// Internal helper functions
-bool espz_init_device_discovery(esp32_zig_obj_t *self);
-bool init_device_manager(void);
-esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, const uint8_t ieee_addr[8], bool initial_load_context);
-esp_err_t remove_device_from_list(esp32_zig_obj_t *self, uint16_t short_addr);
-esp_err_t update_device_info(esp32_zig_obj_t *self, zigbee_device_t *device);
+
+
 
 // Functions for working with link quality
 void device_update_link_quality(zigbee_device_t *device, const void *info_ptr);

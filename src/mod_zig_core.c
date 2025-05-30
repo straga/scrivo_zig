@@ -58,10 +58,16 @@ static const uint32_t esp32_zig_commissioning_task_priority = 5; // Priority for
 // Global variable for cluster list
 esp_zb_cluster_list_t *cluster_list = NULL;
 
-// Global instance of the main Zigbee object for MicroPython
-//esp32_zig_obj_t esp32_zig_obj; 
-// Global pointer to the main Zigbee object, initialized in esp_zb_app_init
-esp32_zig_obj_t *zb_obj = &esp32_zig_obj;
+// Глобальная переменная для хранения указателя на объект
+static esp32_zig_obj_t *zb_obj = NULL;
+
+// Функция для получения объекта
+static esp32_zig_obj_t *get_zb_obj(void) {
+    if (!zb_obj) {
+        zb_obj = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+    }
+    return zb_obj;
+}
 
 // Global variable for endpoint list
 static esp_zb_ep_list_t *global_ep_list = NULL;
@@ -487,3 +493,4 @@ bool zigbee_parse_ieee_str_to_addr(const char *ieee_str, uint8_t out_addr[8]) {
     }
     return false;
 }
+

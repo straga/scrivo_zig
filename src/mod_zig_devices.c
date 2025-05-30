@@ -12,6 +12,10 @@
 #include "device_storage.h"
 #include "device_json.h"
 
+// ESP-Zigbee headers for structure definitions
+#include "esp_zigbee_core.h"
+#include "zcl/esp_zigbee_zcl_command.h"
+
 #define LOG_TAG "MOD_ZIG_DEVICES"
 
 // Python API functions for device management
@@ -36,6 +40,25 @@ mp_obj_t esp32_zig_save_device(size_t n_args, const mp_obj_t *args) {
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_save_device_obj, 2, 2, esp32_zig_save_device);
+
+// Remove single device
+mp_obj_t esp32_zig_remove_device(size_t n_args, const mp_obj_t *args) {
+    if (n_args != 2) {
+        mp_raise_ValueError(MP_ERROR_TEXT("remove_device requires device short address"));
+        return mp_const_none;
+    }
+    
+    uint16_t short_addr = mp_obj_get_int(args[1]);
+    esp_err_t err = device_manager_remove(short_addr);
+    if (err != ESP_OK) {
+        mp_raise_msg_varg(&mp_type_RuntimeError, 
+                         MP_ERROR_TEXT("Failed to remove device: %s"), 
+                         esp_err_to_name(err));
+    }
+    
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_remove_device_obj, 2, 2, esp32_zig_remove_device);
 
 // Load single device
 mp_obj_t esp32_zig_load_device(size_t n_args, const mp_obj_t *args) {
@@ -96,39 +119,57 @@ mp_obj_t esp32_zig_get_device(size_t n_args, const mp_obj_t *args) {
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_get_device_obj, 2, 2, esp32_zig_get_device);
 
-// Initialize device manager function
-bool init_device_manager(void) {
-    esp_err_t err = device_manager_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(LOG_TAG, "Failed to init device manager: %s", esp_err_to_name(err));
-        return false;
+// Get list of all devices (only short addresses)
+mp_obj_t esp32_zig_get_device_list(size_t n_args, const mp_obj_t *args) {
+    if (n_args != 1) {
+        mp_raise_ValueError(MP_ERROR_TEXT("get_device_list takes no arguments"));
+        return mp_const_none;
     }
-    return true;
-}
-
-// High-level device management functions
-esp_err_t add_device_to_list(esp32_zig_obj_t *self, uint16_t short_addr, const uint8_t ieee_addr[8], bool initial_load_context) {
-    esp_err_t err = device_manager_add(short_addr, ieee_addr, MP_OBJ_FROM_PTR(self), initial_load_context);
-    return err;
-}
-
-esp_err_t remove_device_from_list(esp32_zig_obj_t *self, uint16_t short_addr) {
-    esp_err_t err = device_manager_remove(short_addr);
-    if (err == ESP_OK) {
-        device_storage_remove(self, short_addr);
+    size_t count;
+    zigbee_device_t *devices = device_manager_get_list(&count);
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    for (size_t i = 0; i < count; i++) {
+        mp_obj_list_append(list, mp_obj_new_int(devices[i].short_addr));
     }
-    return err;
+    return list;
 }
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_get_device_list_obj, 1, 1, esp32_zig_get_device_list);
 
-esp_err_t update_device_info(esp32_zig_obj_t *self, zigbee_device_t *device) {
-    zigbee_device_t *existing_device = device_manager_get(device->short_addr);
-    if (existing_device != NULL) {
-        // Update device info
-        device_manager_update(device);
-        return ESP_OK;
+// Get summary info for device: selected fields only
+mp_obj_t esp32_zig_get_device_summary(size_t n_args, const mp_obj_t *args) {
+    if (n_args != 2) {
+        mp_raise_ValueError(MP_ERROR_TEXT("get_device_summary requires device short address"));
+        return mp_const_none;
     }
-    return ESP_ERR_NOT_FOUND;
+    uint16_t short_addr = mp_obj_get_int(args[1]);
+    zigbee_device_t *device = device_manager_get(short_addr);
+    if (!device) {
+        return mp_const_none;
+    }
+    // Build JSON with selected fields
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "last_seen", device->last_seen);
+    cJSON_AddStringToObject(json, "ieee", device->ieee_addr_str);
+    cJSON_AddStringToObject(json, "manuf_name", device->manufacturer_name);
+    cJSON_AddStringToObject(json, "model", device->model);
+    cJSON_AddStringToObject(json, "name", device->device_name);
+    cJSON_AddBoolToObject(json, "active", device->active);
+    cJSON_AddNumberToObject(json, "frm_ver", device->firmware_version);
+    cJSON_AddNumberToObject(json, "power", device->power_source);
+    cJSON_AddNumberToObject(json, "bat_volt", device->battery_voltage);
+    cJSON_AddNumberToObject(json, "bat_perc", device->battery_percentage);
+    cJSON_AddNumberToObject(json, "manuf_code", device->manufacturer_code);
+    cJSON_AddNumberToObject(json, "prod_ver", device->prod_config_version);
+    cJSON_AddNumberToObject(json, "lqi", device->last_lqi);
+    cJSON_AddNumberToObject(json, "rssi", device->last_rssi);
+    // Convert to string
+    char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+    mp_obj_t ret = mp_obj_new_str(json_str, strlen(json_str));
+    free(json_str);
+    return ret;
 }
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_get_device_summary_obj, 2, 2, esp32_zig_get_device_summary);
 
 // Helper function for getting text description of link quality
 static const char* get_quality_description(uint8_t lqi) {
@@ -141,22 +182,26 @@ static const char* get_quality_description(uint8_t lqi) {
 void device_update_link_quality(zigbee_device_t *device, const void *info_ptr) {
     if (!device || !info_ptr) return;
     
-// Using a simple structure to access LQI and RSSI
-    typedef struct {
-        uint8_t lqi;
-        int8_t rssi;
-    } link_quality_info_t;
+    // Since we cannot reliably access LQI and RSSI from ZCL command messages
+    // (these fields are not consistently available in all message types),
+    // we'll implement a simple approach that just marks the device as active
+    // when this function is called, indicating recent communication.
     
-    const link_quality_info_t *info = (const link_quality_info_t *)info_ptr;
+    // The info_ptr parameter is kept for future extensibility when 
+    // proper network quality information becomes available through
+    // different callback mechanisms.
     
-// Update only if values have changed
-    if (device->last_lqi != info->lqi || device->last_rssi != info->rssi) {
-        device->last_lqi = info->lqi;
-        device->last_rssi = info->rssi;
-        
-        ESP_LOGI(LOG_TAG, "Device 0x%04x signal quality updated: LQI=%d (%s), RSSI=%ddBm", 
-                 device->short_addr, info->lqi, get_quality_description(info->lqi), info->rssi);
-    }
+    // Mark device as active since we received a message from it
+    device->active = true;
+    
+    ESP_LOGD(LOG_TAG, "Device 0x%04x marked as active (recent communication)", 
+             device->short_addr);
+    
+    // Note: In the future, this function should be called from contexts where
+    // actual LQI/RSSI information is available, such as:
+    // - Network layer callbacks with esp_zb_apsde_data_ind_t
+    // - Neighbor table updates with esp_zb_nwk_neighbor_info_t
+    // - Custom network monitoring functions
 }
 
 uint8_t device_get_link_quality(zigbee_device_t *device) {

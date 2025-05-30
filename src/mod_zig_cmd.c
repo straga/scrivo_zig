@@ -306,49 +306,6 @@ static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *pos_args, 
 MP_DEFINE_CONST_FUN_OBJ_KW(esp32_zig_bind_cluster_obj, 1, esp32_zig_bind_cluster);
 
 
-// static mp_obj_t esp32_zig_bind_cluster(size_t n_args, const mp_obj_t *args) {
-//     // args: (self, addr, endpoint, cluster_id)
-//     uint16_t addr      = mp_obj_get_int(args[1]);
-//     uint8_t  ep        = mp_obj_get_int(args[2]);
-//     uint16_t cluster   = mp_obj_get_int(args[3]);
-
-//     // 1) ZDO Bind
-//     esp_zb_zdo_bind_req_param_t bind_req = {0};
-//     // Get device by short address using device manager
-//     zigbee_device_t *device = device_manager_get(addr);
-//     if (!device) {
-//         mp_raise_msg_varg(&mp_type_ValueError,
-//                           "Device 0x%04x not found", addr);
-//     }
-    
-//     // Copy IEEE address
-//     memcpy(bind_req.src_address, device->ieee_addr, sizeof(bind_req.src_address));
-    
-//     bind_req.cluster_id    = cluster;
-//     bind_req.src_endp      = ep;
-//     bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
-//     esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
-//     bind_req.dst_endp      = ESP_ZB_GATEWAY_ENDPOINT;
-//     bind_req.req_dst_addr  = addr;
-    
-//     bind_ctx_t *bctx = malloc(sizeof(bind_ctx_t));
-//     if (bctx == NULL) {
-//         mp_raise_msg(&mp_type_MemoryError, "Failed to allocate bind context");
-//     }
-    
-//     *bctx = (bind_ctx_t){ .short_addr = addr,
-//                           .endpoint = ep,
-//                           .cluster_id = cluster };
-                          
-//     ZB_LOCK();
-//     esp_zb_zdo_device_bind_req(&bind_req, bind_cb, bctx);
-//     ZB_UNLOCK();
-
-//     return mp_const_none;
-// }
-// MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(esp32_zig_bind_cluster_obj, 4, 4, esp32_zig_bind_cluster);
-
-
 // Python API: configure reporting for a bound cluster
 static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
 
@@ -413,17 +370,17 @@ static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *pos_ar
 
         int reportable_change_input = vals[ARG_reportable_change].u_int;
 
-        // Всегда выделяем память для SEND direction
+        // Always allocate memory for SEND direction / always allocate memory for SEND direction
         allocated_reportable_change_val = malloc(sizeof(uint32_t));
         if (allocated_reportable_change_val == NULL) {
             mp_raise_msg(&mp_type_MemoryError, "Failed to allocate for reportable_change");
         }
         
         if (reportable_change_input != -1) {
-            // Пользователь указал значение
+            // User specified value
             *allocated_reportable_change_val = (uint32_t)reportable_change_input;
         } else {
-            // Пользователь не указал - используем 0 (любое изменение) или 0xFFFFFFFF (только по времени)
+            // User did not specify - use 0 (any change) or 0xFFFFFFFF (only by time)
             *allocated_reportable_change_val = 0xFFFFFFFF; // Только по времени
         }
         record.reportable_change = allocated_reportable_change_val;

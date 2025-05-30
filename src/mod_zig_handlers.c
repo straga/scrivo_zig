@@ -58,8 +58,8 @@ void rcp_error_handler(void) {
 
 // Function for sending message to queue with message type
 void send_msg_to_micropython_queue(uint8_t msg_py, uint16_t signal_type, uint16_t src_addr, uint8_t endpoint, uint16_t cluster_id, uint8_t *data, uint8_t data_len) {
-    esp32_zig_obj_t *self = &esp32_zig_obj;
-    if (self->message_queue) {
+    esp32_zig_obj_t *self = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+    if (self) {
 
         // Log event to ESP-IDF console
         ESP_LOGI(HANDLERS_TAG, "Event->Py addr=0x%04x ep=%u cid=0x%04x len=%u sig=0x%04x", 
@@ -92,6 +92,8 @@ void send_msg_to_micropython_queue(uint8_t msg_py, uint16_t signal_type, uint16_
         if (self->rx_callback != mp_const_none) {
             mp_sched_schedule(self->rx_callback, mp_const_none);
         }
+    } else {
+        ESP_LOGE(HANDLERS_TAG, "Invalid zig_self pointer");
     }
 }
 
@@ -396,7 +398,7 @@ static void simple_desc_req_cb(esp_zb_zdp_status_t status, esp_zb_af_simple_desc
 
 // Save device after initialization of all endpoints and clusters
         ESP_LOGI(HANDLERS_TAG, "Device 0x%04x: endpoints and clusters initialized", device->short_addr);
-        device_storage_save(&esp32_zig_obj, device->short_addr);
+        device_storage_save((esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr), device->short_addr);
     
 }
 
@@ -430,8 +432,15 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 esp_zb_ieee_addr_t coord_ieee;
                 esp_zb_get_long_address(coord_ieee);
                 
+                // Get object from global pointer
+                esp32_zig_obj_t *zb_obj = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+                if (!zb_obj) {
+                    ESP_LOGE(HANDLERS_TAG, "Failed to get zigbee object from global pointer");
+                    break;
+                }
+                
                 // Add or update coordinator in device manager
-                esp_err_t err = device_manager_add(0x0000, coord_ieee, MP_OBJ_FROM_PTR(zb_obj), false);
+                esp_err_t err = device_manager_add(0x0000, coord_ieee, MP_OBJ_FROM_PTR(zb_obj));
                 if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                     ESP_LOGE(HANDLERS_TAG, "Failed to add/update coordinator in device manager: %s", esp_err_to_name(err));
                 } else {
@@ -493,8 +502,15 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             zigbee_format_ieee_addr_to_str(dev_annce_params->ieee_addr, temp_ieee_str, sizeof(temp_ieee_str));
             ESP_LOGI(HANDLERS_TAG, "New device announcement: 0x%04x (IEEE: %s)", dev_annce_params->device_short_addr, temp_ieee_str);
 
+            // Get object from global pointer
+            esp32_zig_obj_t *zb_obj = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+            if (!zb_obj) {
+                ESP_LOGE(HANDLERS_TAG, "Failed to get zigbee object from global pointer");
+                break;
+            }
+
             // Find or add device using device manager
-            esp_err_t err = device_manager_add(dev_annce_params->device_short_addr, dev_annce_params->ieee_addr, MP_OBJ_FROM_PTR(zb_obj), false);
+            esp_err_t err = device_manager_add(dev_annce_params->device_short_addr, dev_annce_params->ieee_addr, MP_OBJ_FROM_PTR(zb_obj));
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(HANDLERS_TAG, "ZIGBEE: Failed to add/update device 0x%04x in manager, error %s. Continuing with EP discovery.", 
                          dev_annce_params->device_short_addr, esp_err_to_name(err));
@@ -557,7 +573,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                         
                         // Now save coordinator with all information
                         if (esp_zb_is_started()) {
-                            device_storage_save(&esp32_zig_obj, 0x0000);
+                            device_storage_save((esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr), 0x0000);
                         }
                     }
                 }
@@ -645,25 +661,34 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             char ieee_from_signal_str[24];
             zigbee_format_ieee_addr_to_str(update_params->long_addr, ieee_from_signal_str, sizeof(ieee_from_signal_str));
 
-            ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device update signal: short=0x%04x, IEEE_in_signal=%s, status=%d", 
-                update_params->short_addr, ieee_from_signal_str, update_params->status);
+            ESP_LOGI(HANDLERS_TAG, "Device update signal: short_addr=0x%04x, IEEE=%s, status=%d",
+                     update_params->short_addr, ieee_from_signal_str, update_params->status);
 
             zigbee_device_t *device = device_manager_get(update_params->short_addr);
             if (!device) {
                 ESP_LOGW(HANDLERS_TAG, "Device not found by short_addr=0x%04x for device update signal. IEEE from signal was %s. Attempting to add and interview.", 
                          update_params->short_addr, ieee_from_signal_str);
                 
+                // Get object from global pointer
+                esp32_zig_obj_t *zb_obj = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
+                if (!zb_obj) {
+                    ESP_LOGE(HANDLERS_TAG, "Failed to get zigbee object from global pointer");
+                    break;
+                }
+
                 // Attempt to add this device to the manager as it's clearly communicating
-                esp_err_t add_err = device_manager_add(update_params->short_addr, update_params->long_addr, MP_OBJ_FROM_PTR(zb_obj), false);
+                esp_err_t add_err = device_manager_add(update_params->short_addr, update_params->long_addr, MP_OBJ_FROM_PTR(zb_obj));
                 if (add_err == ESP_OK || add_err == ESP_ERR_INVALID_STATE) { // ESP_ERR_INVALID_STATE might mean it was already added by a concurrent event or handled conflict
-                    ESP_LOGI(HANDLERS_TAG, "Added/Processed device 0x%04x (IEEE: %s) from Device Update signal. Requesting Active EPs.", 
+                    ESP_LOGI(HANDLERS_TAG, "Successfully added device 0x%04x (IEEE: %s) from Device Update signal. Will interview.", 
                              update_params->short_addr, ieee_from_signal_str);
                     
-                    // Request active endpoints to start interview process
+                    // Request active endpoints for update 
                     esp_zb_zdo_active_ep_req_param_t active_ep_req = {
                         .addr_of_interest = update_params->short_addr
                     };
                     esp_zb_zdo_active_ep_req(&active_ep_req, active_ep_cb, (void*)(uintptr_t)update_params->short_addr);
+                    
+                    ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device request Active EP for device: 0x%04x", update_params->short_addr);
                 } else {
                     ESP_LOGE(HANDLERS_TAG, "Failed to add device 0x%04x (IEEE: %s) from Device Update signal. Error: %s. Cannot interview.", 
                              update_params->short_addr, ieee_from_signal_str, esp_err_to_name(add_err));
@@ -672,17 +697,21 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 ESP_LOGI(HANDLERS_TAG, "ZIGBEE: Device update for known device: short=0x%04x (signal IEEE=%s, stored IEEE=%s), signal_status=%d",
                          device->short_addr, ieee_from_signal_str, device->ieee_addr_str, update_params->status);
                 
-                // Важно: Проверить, совпадает ли IEEE из сигнала с сохраненным для этого short_addr
+                // Important: Check if IEEE from signal matches the stored IEEE for this short_addr
                 if (memcmp(device->ieee_addr, update_params->long_addr, sizeof(esp_zb_ieee_addr_t)) != 0) {
                     ESP_LOGW(HANDLERS_TAG, "IEEE MISMATCH for short_addr 0x%04x! Signal reports IEEE %s, but manager has %s.",
                              device->short_addr, ieee_from_signal_str, device->ieee_addr_str);
-                    // Здесь может потребоваться дополнительная логика для разрешения конфликта,
-                    // например, обновить IEEE в device_manager или пометить устройство как подозрительное.
-                    // Пока просто логируем.
+                    // Here additional logic may be needed to resolve the conflict,
+                    // for example, update IEEE in device_manager or mark the device as suspicious.
+                    // For now, just log.
                 }
 
-                device->last_seen = esp_timer_get_time() / 1000;
-                // Дополнительная логика обработки статуса или сохранения здесь, если необходимо.
+                // Update device metrics
+                device->active = true;
+                device_manager_update_timestamp(update_params->short_addr);
+                
+                // Save device after update
+                device_storage_save((esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr), device->short_addr);
             }
             break;
         }
@@ -768,46 +797,39 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
 
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID: {                       //         = 0x2000,   /*!< Attribute Report, refer to esp_zb_zcl_report_attr_message_t */
         const esp_zb_zcl_report_attr_message_t *report_msg = (esp_zb_zcl_report_attr_message_t *)message;
-        if (report_msg->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-// Update link quality for device
-            zigbee_device_t *device = device_manager_get(report_msg->src_address.u.short_addr);
-            if (device) {
-                device_update_link_quality(device, report_msg);
+
+        // Send full attribute data: ID (2 bytes), type (1 byte), payload
+        uint16_t attr_id = report_msg->attribute.id;
+        uint8_t  attr_type = report_msg->attribute.data.type;
+        uint16_t payload_len = report_msg->attribute.data.size;
+        void    *value_ptr = report_msg->attribute.data.value;
+        size_t buf_len = 2 + 1 + payload_len;
+        uint8_t *buf = malloc(buf_len);
+        if (buf) {
+            buf[0] = attr_id & 0xFF;
+            buf[1] = (attr_id >> 8) & 0xFF;
+            buf[2] = attr_type;
+            if (value_ptr && payload_len) {
+                memcpy(buf + 3, value_ptr, payload_len);
             }
 
-            // Send full attribute data: ID (2 bytes), type (1 byte), payload
-            uint16_t attr_id = report_msg->attribute.id;
-            uint8_t  attr_type = report_msg->attribute.data.type;
-            uint16_t payload_len = report_msg->attribute.data.size;
-            void    *value_ptr = report_msg->attribute.data.value;
-            size_t buf_len = 2 + 1 + payload_len;
-            uint8_t *buf = malloc(buf_len);
-            if (buf) {
-                buf[0] = attr_id & 0xFF;
-                buf[1] = (attr_id >> 8) & 0xFF;
-                buf[2] = attr_type;
-                if (value_ptr && payload_len) {
-                    memcpy(buf + 3, value_ptr, payload_len);
-                }
+            send_msg_to_micropython_queue(
+                ZIG_MSG_ZB_ACTION_HANDLER,
+                ESP_ZB_CORE_REPORT_ATTR_CB_ID,
+                report_msg->src_address.u.short_addr,
+                report_msg->src_endpoint,
+                report_msg->cluster,
+                buf,
+                buf_len
+            );
 
-                // // MicroPython queue
-                send_msg_to_micropython_queue(
-                    ZIG_MSG_ZB_ACTION_HANDLER,
-                    ESP_ZB_CORE_REPORT_ATTR_CB_ID,
-                    report_msg->src_address.u.short_addr,
-                    report_msg->src_endpoint,
-                    report_msg->cluster,
-                    buf,
-                    buf_len
-                );
-
-                free(buf);
-            }
+            free(buf);
         }
         break;
     }
     case ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID: {
         const esp_zb_zcl_cmd_read_attr_resp_message_t *read_msg = (esp_zb_zcl_cmd_read_attr_resp_message_t *)message;
+        
         if (read_msg->info.status == ESP_ZB_ZCL_STATUS_SUCCESS) {
             esp_zb_zcl_read_attr_resp_variable_t *variable = read_msg->variables;
             
@@ -817,12 +839,10 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
                 uint16_t short_addr = read_msg->info.src_address.u.short_addr;
                 
 // Get device through device manager
-                zigbee_device_t *device = device_manager_get(short_addr);
-                
-// If device is found, process attributes
+                zigbee_device_t *device = device_manager_get(short_addr);                // If device is found, process attributes
                 if (device) {
-// Update link quality
-                    device_update_link_quality(device, read_msg);
+                    // Update device timestamp instead of LQI/RSSI
+                    device_manager_update_timestamp(short_addr);
 
                     esp_zb_zcl_read_attr_resp_variable_t *current = variable;
                     
@@ -885,7 +905,7 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
 // Save device after receiving all attributes
                     if (device->manufacturer_name[0] != '\0' && device->device_name[0] != '\0') {
                         ESP_LOGI(HANDLERS_TAG, "Device 0x%04x: got all required attributes", device->short_addr);
-                        device_storage_save(&esp32_zig_obj, device->short_addr);
+                        device_storage_save((esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr), device->short_addr);
                     }
                 }
             }
@@ -927,6 +947,7 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
     }
     case ESP_ZB_CORE_CMD_REPORT_CONFIG_RESP_CB_ID: {
         const esp_zb_zcl_cmd_config_report_resp_message_t *config_msg = (esp_zb_zcl_cmd_config_report_resp_message_t *)message;
+        
         if (config_msg->info.status == ESP_ZB_ZCL_STATUS_SUCCESS) {
             // Send report configuration information
             uint8_t data[2] = {

@@ -54,4 +54,34 @@ esp_err_t device_storage_load_all(esp32_zig_obj_t *self);
  */
 esp_err_t device_storage_remove(esp32_zig_obj_t *self, uint16_t short_addr);
 
+/**
+ * @brief Initialize device storage system
+ * 
+ * Initialize device storage subsystem.
+ * Should be called once during system startup.
+ * 
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t device_storage_init(void);
+
+/**
+ * @brief Deinitialize device storage system
+ * 
+ * Clean up device storage subsystem.
+ * Should be called during system shutdown.
+ */
+void device_storage_deinit(void);
+
+/**
+ * @brief Set storage callback and register it in GC
+ * 
+ * @param cb Python callback object
+ */
+void device_storage_set_callback(mp_obj_t cb);
+
+/**
+ * @brief Clear storage callback and unregister from GC
+ */
+void device_storage_clear_callback(void);
+
 #endif
