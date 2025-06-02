@@ -84,4 +84,8 @@ void device_storage_set_callback(mp_obj_t cb);
  */
 void device_storage_clear_callback(void);
 
+// Function prototypes
+esp_err_t device_storage_load_all(esp32_zig_obj_t *self);
+esp_err_t device_storage_wait_load_complete(TickType_t timeout);
+
 #endif

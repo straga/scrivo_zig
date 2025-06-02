@@ -381,8 +381,8 @@ static mp_obj_t esp32_zig_configure_report(size_t n_args, const mp_obj_t *pos_ar
             *allocated_reportable_change_val = (uint32_t)reportable_change_input;
         } else {
             // User did not specify - use 0 (any change) or 0xFFFFFFFF (only by time)
-            *allocated_reportable_change_val = 0xFFFFFFFF; // Только по времени
-        }
+                *allocated_reportable_change_val = 0xFFFFFFFF; // Only by time
+            }
         record.reportable_change = allocated_reportable_change_val;
 
 

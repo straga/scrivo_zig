@@ -75,7 +75,7 @@ mp_obj_t global_esp32_zig_obj_ptr = MP_OBJ_FROM_PTR(NULL);
 
 // main init function
 mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    // Обновляем глобальный указатель
+    // Update global pointer 
     global_esp32_zig_obj_ptr = MP_OBJ_FROM_PTR(self);
 
     enum { ARG_name, ARG_bitrate, ARG_rcp_reset_pin, ARG_rcp_boot_pin, ARG_uart_port, ARG_uart_rx_pin, ARG_uart_tx_pin, ARG_start, ARG_storage };
@@ -113,13 +113,6 @@ mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, const mp_ob
     self->storage_cb = args[ARG_storage].u_obj;
     device_storage_set_callback(self->storage_cb);
 
-    // load all devices from separate files
-    esp_err_t dev_loaded = device_storage_load_all(self);
-    if (dev_loaded != ESP_OK) {
-        mp_printf(&mp_plat_print, "Json load failed to loading devices: '%s')", esp_err_to_name(dev_loaded));
-        // not critical error, continue with empty device list
-    }
-
     // Set uart parameters
     self->config->bitrate       =   args[ARG_bitrate].u_int;
     self->config->rcp_reset_pin =   args[ARG_rcp_reset_pin].u_int;
@@ -145,7 +138,7 @@ mp_obj_t esp32_zig_init_helper(esp32_zig_obj_t *self, size_t n_args, const mp_ob
         }
     }
 
-    self->config->network_formed = true;
+    //self->config->network_formed = true;
     return mp_const_none;
 }
 
@@ -177,6 +170,7 @@ static mp_obj_t esp32_zig_make_new(const mp_obj_type_t *type, size_t n_args, siz
     self->tx_callback = mp_const_none;
     self->irq_handler = NULL;
     self->gateway_task = NULL;
+    self->commissioning_task = NULL;
     self->message_queue = NULL;
 
     // Update global pointer

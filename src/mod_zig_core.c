@@ -44,6 +44,7 @@
 #include "mod_zig_handlers.h"
 #include "mod_zig_custom.h"  // Adding header file inclusion
 #include "main.h"  // Adding for access to constants
+#include "device_storage.h"  // Adding for device storage functions
 
 static const char *TAG = "ZIGBEE_CORE";
 
@@ -58,20 +59,11 @@ static const uint32_t esp32_zig_commissioning_task_priority = 5; // Priority for
 // Global variable for cluster list
 esp_zb_cluster_list_t *cluster_list = NULL;
 
-// Глобальная переменная для хранения указателя на объект
-static esp32_zig_obj_t *zb_obj = NULL;
-
-// Функция для получения объекта
-static esp32_zig_obj_t *get_zb_obj(void) {
-    if (!zb_obj) {
-        zb_obj = (esp32_zig_obj_t *)MP_OBJ_TO_PTR(global_esp32_zig_obj_ptr);
-    }
-    return zb_obj;
-}
-
 // Global variable for endpoint list
 static esp_zb_ep_list_t *global_ep_list = NULL;
 
+// Semaphore for synchronization of commissioning and gateway tasks
+static SemaphoreHandle_t commissioning_done_semaphore = NULL;
 
 // Need for micropython compatibility
 extern BaseType_t xTaskCreatePinnedToCore(TaskFunction_t pxTaskCode,
@@ -198,16 +190,14 @@ static esp_err_t check_rcp_version(void)
 }
 
 // Task for executing the main Zigbee event loop
-void esp_zb_gateway_task(void *pvParameters)
+static void esp_zb_gateway_task(void *pvParameters)
 {
-
-    ESP_LOGI(TAG, "GTW:Task: Zigbee gateway task started in async mode ");
+    ESP_LOGI(TAG, "GTW:Task: Zigbee gateway task started in async mode");
 
     while (1) {
         esp_zb_stack_main_loop_iteration();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-
 }
 
 // Function for initializing Zigbee gateway
@@ -221,11 +211,8 @@ esp_err_t init_zigbee_gateway(esp32_zig_obj_t *self) {
         return ret;
     }
     
-
-    
     // Initialize Zigbee platform using high-level API
     ESP_LOGI(TAG, "GATEWAY:INIT: Initializing Zigbee platform for gateway");
-
     
     // Use settings from configuration
     ret = init_zigbee_platform(
@@ -241,7 +228,6 @@ esp_err_t init_zigbee_gateway(esp32_zig_obj_t *self) {
         ESP_LOGI(TAG, "GATEWAY:INIT: Error initializing Zigbee platform: %s", esp_err_to_name(ret));
         return ret;
     }
-
 
     ESP_LOGI(TAG, "GATEWAY:INIT: Zigbee platform successfully initialized");
     
@@ -382,6 +368,20 @@ static void zigbee_commissioning_task(void *pvParameters) {
     esp32_zig_obj_t *self = (esp32_zig_obj_t*)pvParameters;
     // Release Python GIL while blocking operations run
     MP_THREAD_GIL_EXIT();
+
+    // Load all devices from storage first
+    ESP_LOGI(TAG, "GATEWAY:TASK: Loading devices from storage...");
+    device_storage_load_all(self);
+
+    // Wait for device loading to complete
+    esp_err_t wait_result = device_storage_wait_load_complete(pdMS_TO_TICKS(5000));
+    if (wait_result != ESP_OK) {
+        ESP_LOGW(TAG, "Timeout waiting for device loading, continuing with empty device list");
+    } else {
+        ESP_LOGI(TAG, "Device loading completed successfully");
+    }
+
+    // Initialize Zigbee gateway
     esp_err_t err = init_zigbee_gateway(self);
     
     if (err != ESP_OK) {
@@ -389,21 +389,20 @@ static void zigbee_commissioning_task(void *pvParameters) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "COMISSIONING: Commissioning completed, wont starting main Zigbee Task");
-    // Start main Zigbee event loop task
-    BaseType_t rc = xTaskCreatePinnedToCore(
-        esp_zb_gateway_task,
-        "zigbee_gateway",
-        esp32_zig_gateway_task_stack,
-        NULL,
-        esp32_zig_gateway_task_priority,
-        &self->gateway_task,
-        ZIGBEE_TASK_CORE // MP_TASK_COREID
-    );
-    if (rc != pdPASS) {
-        ESP_LOGI(TAG, "COMISSIONING: Failed to start main Zigbee Task");
-    }
-    ESP_LOGI(TAG, "COMISSIONING: Commissioning completed, starting main Zigbee Task");
+
+    uint16_t current_pan_id = esp_zb_get_pan_id();
+    uint8_t current_channel = esp_zb_get_current_channel();
+    
+    // Network is considered formed if PAN ID is not 0 or 0xFFFF
+    bool is_network_formed = (current_pan_id != 0 && current_pan_id != 0xFFFF);
+    
+    // Update data in the config object
+    self->config->network_formed = is_network_formed;
+    self->config->pan_id = current_pan_id;
+    self->config->channel = current_channel;
+
+    ESP_LOGI(TAG, "COMISSIONING: Commissioning task completed, signaling completion");
+    xSemaphoreGive(commissioning_done_semaphore);  // Signal completion
     vTaskDelete(NULL);
 }
 
@@ -411,18 +410,57 @@ static void zigbee_commissioning_task(void *pvParameters) {
 
 // Helper: schedule commissioning in background
 esp_err_t esp32_zig_start_gateway(esp32_zig_obj_t *self) {
+    // Create semaphore if not created
+    if (commissioning_done_semaphore == NULL) {
+        commissioning_done_semaphore = xSemaphoreCreateBinary();
+        if (commissioning_done_semaphore == NULL) {
+            ESP_LOGE(TAG, "Failed to create commissioning semaphore");
+            return ESP_FAIL;
+        }
+    }
+
     // Schedule commissioning task without blocking Python
-    
     BaseType_t created = xTaskCreatePinnedToCore(
-        zigbee_commissioning_task,                      // Task function
-        "zigbee_comm",                                  // Task name
-        esp32_zig_commissioning_task_stack,             // Stack size
-        self,                                           // Pass self pointer
-        esp32_zig_commissioning_task_priority,          // Priority
-        &self->gateway_task,                            // Handle
-        ZIGBEE_TASK_CORE                                // MP_TASK_COREID    // Core to run
+        zigbee_commissioning_task,                      
+        "zigbee_comm",                                  
+        esp32_zig_commissioning_task_stack,             
+        self,                                           
+        esp32_zig_commissioning_task_priority,          
+        &self->commissioning_task,                      
+        ZIGBEE_TASK_CORE                                
     );
-    return (created == pdPASS) ? ESP_OK : ESP_FAIL;
+
+    if (created != pdPASS) {
+        return ESP_FAIL;
+    }
+
+    // Wait for commissioning task to complete
+    if (xSemaphoreTake(commissioning_done_semaphore, pdMS_TO_TICKS(10000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Timeout waiting for commissioning task");
+        return ESP_FAIL;
+    }
+
+    // Create main task only after successful initialization
+    ESP_LOGI(TAG, "COMISSIONING: Starting main Zigbee Task");
+    BaseType_t rc = xTaskCreatePinnedToCore(
+        esp_zb_gateway_task,
+        "zigbee_gateway_main",
+        esp32_zig_gateway_task_stack,
+        NULL,
+        esp32_zig_gateway_task_priority,
+        &self->gateway_task,
+        ZIGBEE_TASK_CORE
+    );
+    
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "COMISSIONING: Failed to start main Zigbee Task. Error code: %d", rc);
+        ESP_LOGE(TAG, "COMISSIONING: Free heap: %lu, Free stack: %lu", 
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned long)uxTaskGetStackHighWaterMark(NULL));
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
 }
 
 

@@ -33,6 +33,7 @@ typedef struct _esp32_zig_obj_t {
     mp_obj_t tx_callback;              // Callback for transmission completion
     TaskHandle_t irq_handler;          // FreeRTOS task handle for RCP event processing
     TaskHandle_t gateway_task;         // FreeRTOS task handle for Zigbee gateway main loop
+    TaskHandle_t commissioning_task;   // FreeRTOS task handle for commissioning task
     QueueHandle_t message_queue;       // Queue for delivering Zigbee messages to MicroPython
     mp_obj_t storage_cb;               // Callback for saving devices to storage
 } esp32_zig_obj_t;

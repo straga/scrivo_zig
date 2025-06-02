@@ -52,7 +52,7 @@
 // Forward declaration of global Zigbee object
 //extern esp32_zig_obj_t esp32_zig_obj;
 
-// Глобальный указатель на главный объект для регистрации в GC
+//Global pointer to the main object for registration in GC
 extern mp_obj_t global_esp32_zig_obj_ptr;
 MP_REGISTER_ROOT_POINTER(mp_obj_t global_esp32_zig_obj_ptr);
 

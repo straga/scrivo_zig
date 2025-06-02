@@ -66,6 +66,7 @@ extern mp_obj_t global_esp32_zig_obj_ptr;
 static mp_obj_t do_device_save_handler(mp_obj_t short_addr_obj);
 static mp_obj_t do_device_remove_handler(mp_obj_t short_addr_obj);
 static mp_obj_t do_load_all_handler(mp_obj_t ctx_in);
+void device_storage_update_callback(void);
 
 // Declare function objects after forward declarations
 static MP_DEFINE_CONST_FUN_OBJ_1(do_device_save_handler_obj, do_device_save_handler);
@@ -91,6 +92,9 @@ typedef struct {
 static QueueHandle_t save_event_queue = NULL;
 #define SAVE_EVENT_QUEUE_SIZE 10
 
+// Add semaphore for device loading synchronization
+static SemaphoreHandle_t device_load_complete_semaphore = NULL;
+
 // Initialize event queue
 esp_err_t device_storage_init(void) {
     // Initialize queue if not already initialized
@@ -104,6 +108,17 @@ esp_err_t device_storage_init(void) {
     } else {
         ESP_LOGW(LOG_TAG, "Save queue already initialized");
     }
+
+    // Initialize semaphore if not already initialized
+    if (device_load_complete_semaphore == NULL) {
+        device_load_complete_semaphore = xSemaphoreCreateBinary();
+        if (device_load_complete_semaphore == NULL) {
+            ESP_LOGE(LOG_TAG, "Failed to create device load semaphore");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(LOG_TAG, "Device load semaphore initialized");
+    }
+
     return ESP_OK;
 }
 
@@ -119,6 +134,12 @@ void device_storage_deinit(void) {
         vQueueDelete(save_event_queue);
         save_event_queue = NULL;
         ESP_LOGI(LOG_TAG, "Save queue deinitialized");
+    }
+
+    if (device_load_complete_semaphore) {
+        vSemaphoreDelete(device_load_complete_semaphore);
+        device_load_complete_semaphore = NULL;
+        ESP_LOGI(LOG_TAG, "Device load semaphore deinitialized");
     }
 }
 
@@ -250,7 +271,7 @@ static mp_obj_t do_device_save_handler(mp_obj_t short_addr_obj) {
     }
 
     // Update pointer to current callback location
-    //device_storage_update_callback();
+    device_storage_update_callback();
 
     // Safely get short_addr
     mp_int_t short_addr;
@@ -368,6 +389,8 @@ static mp_obj_t do_load_all_handler(mp_obj_t ctx_in) {
     
     bool success = false;
     cJSON *json = NULL;
+    mp_obj_t *files = NULL;
+    size_t file_count = 0;
     
     // Get file list on first run
     if (ctx->current_index == 0 && ctx->retry_count == 0) {
@@ -377,21 +400,34 @@ static mp_obj_t do_load_all_handler(mp_obj_t ctx_in) {
 
         if (file_list == mp_const_none) {
             ESP_LOGE(LOG_TAG, "Failed to get file list");
+            ctx->storage_cb_obj = ctx->zig_obj_mp = NULL;
             SAFE_FREE(ctx);
             return mp_const_none;
         }
 
-        mp_obj_get_array(file_list, &ctx->file_count, &ctx->files);
-        if (ctx->file_count == 0) {
+        mp_obj_get_array(file_list, &file_count, &files);
+        if (file_count == 0) {
             ESP_LOGD(LOG_TAG, "No files to load");
+            ctx->storage_cb_obj = ctx->zig_obj_mp = NULL;
             SAFE_FREE(ctx);
             return mp_const_none;
         }
+
+        // Save the list of files in the context
+        ctx->files = files;
+        ctx->file_count = file_count;
     }
 
     // If there is a file to load
     if (ctx->current_index < ctx->file_count) {
-        const char *filename = mp_obj_str_get_str(ctx->files[ctx->current_index]);
+        // Add GC protection for the file object
+        mp_obj_t file_obj = ctx->files[ctx->current_index];
+        if (!MP_OBJ_IS_STR(file_obj)) {
+            ESP_LOGE(LOG_TAG, "Invalid file object type at index %d", ctx->current_index);
+            goto next_file;
+        }
+        
+        const char *filename = mp_obj_str_get_str(file_obj);
         if (!filename) {
             ESP_LOGE(LOG_TAG, "Invalid filename at index %d", ctx->current_index);
             goto next_file;
@@ -406,10 +442,20 @@ static mp_obj_t do_load_all_handler(mp_obj_t ctx_in) {
         // Load device
         mp_obj_t load_cmd = mp_obj_new_str("load", 4);
         mp_obj_t fname = mp_obj_new_str(filename, strlen(filename));
+        if (!load_cmd || !fname) {
+            ESP_LOGE(LOG_TAG, "Failed to create command objects");
+            goto next_file;
+        }
+        
         mp_obj_t load_args[2] = {load_cmd, fname};
         mp_obj_t json_str = mp_call_function_n_kw(ctx->storage_cb_obj, 2, 0, load_args);
 
         if (json_str != mp_const_none) {
+            if (!MP_OBJ_IS_STR(json_str)) {
+                ESP_LOGE(LOG_TAG, "Invalid JSON string type for device 0x%04x", short_addr);
+                goto next_file;
+            }
+            
             const char *json_data = mp_obj_str_get_str(json_str);
             if (!json_data) {
                 ESP_LOGE(LOG_TAG, "Invalid JSON data for device 0x%04x", short_addr);
@@ -438,6 +484,7 @@ static mp_obj_t do_load_all_handler(mp_obj_t ctx_in) {
                 ESP_LOGW(LOG_TAG, "Load failed for %s, retry %d/%d", filename, ctx->retry_count, MAX_SCHEDULE_RETRIES);
                 if (!mp_sched_schedule((mp_obj_t)&do_load_all_handler_obj, MP_OBJ_FROM_PTR(ctx))) {
                     ESP_LOGE(LOG_TAG, "Failed to schedule retry for %s", filename);
+                    ctx->storage_cb_obj = ctx->zig_obj_mp = NULL;
                     SAFE_FREE(ctx);
                     return mp_const_none;
                 }
@@ -455,6 +502,7 @@ next_file:
         if (ctx->current_index < ctx->file_count) {
             if (!mp_sched_schedule((mp_obj_t)&do_load_all_handler_obj, MP_OBJ_FROM_PTR(ctx))) {
                 ESP_LOGE(LOG_TAG, "Failed to schedule next file load");
+                ctx->storage_cb_obj = ctx->zig_obj_mp = NULL;
                 SAFE_FREE(ctx);
                 return mp_const_none;
             }
@@ -463,6 +511,16 @@ next_file:
     }
 
     ESP_LOGD(LOG_TAG, "Load all completed");
+    // Signal that loading is complete and delete semaphore
+    if (device_load_complete_semaphore) {
+        xSemaphoreGive(device_load_complete_semaphore);
+        ESP_LOGD(LOG_TAG, "Device load complete semaphore given");
+        vSemaphoreDelete(device_load_complete_semaphore);
+        device_load_complete_semaphore = NULL;
+        ESP_LOGD(LOG_TAG, "Device load semaphore deleted");
+    }
+
+    // Clear the context
     ctx->storage_cb_obj = ctx->zig_obj_mp = NULL;
     SAFE_FREE(ctx);
     return mp_const_none;
@@ -478,6 +536,16 @@ esp_err_t device_storage_load_all(esp32_zig_obj_t *self) {
     if (!self->storage_cb || self->storage_cb == mp_const_none) {
         ESP_LOGW(LOG_TAG, "No storage callback");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    // Initialize semaphore if not already initialized
+    if (device_load_complete_semaphore == NULL) {
+        device_load_complete_semaphore = xSemaphoreCreateBinary();
+        if (device_load_complete_semaphore == NULL) {
+            ESP_LOGE(LOG_TAG, "Failed to create device load semaphore");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(LOG_TAG, "Device load semaphore initialized");
     }
 
     // Allocate memory for context
@@ -644,6 +712,22 @@ esp_err_t device_storage_load(esp32_zig_obj_t *self, uint16_t short_addr) {
     // Update device in manager
     device_manager_update(&device);
     ESP_LOGD(LOG_TAG, "Device 0x%04x loaded successfully", short_addr);
+    return ESP_OK;
+}
+
+// Function to wait for device loading to complete
+esp_err_t device_storage_wait_load_complete(TickType_t timeout) {
+    if (!device_load_complete_semaphore) {
+        ESP_LOGE(LOG_TAG, "Device load semaphore not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(device_load_complete_semaphore, timeout) != pdTRUE) {
+        ESP_LOGW(LOG_TAG, "Timeout waiting for device load to complete");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ESP_LOGD(LOG_TAG, "Device load complete semaphore taken");
     return ESP_OK;
 }
 
